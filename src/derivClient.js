@@ -39,7 +39,6 @@ export class DerivClient {
       contractId: null
     };
     
-    // CORRIGIDO: Adicionados Volatility 30 e 90 com 3 casas decimais
     this.symbols = {
       '1HZ10V': { name: 'Volatility 10 (1s)', decimals: 2 },
       '1HZ25V': { name: 'Volatility 25 (1s)', decimals: 2 },
@@ -154,11 +153,12 @@ export class DerivClient {
       if (data.proposal_open_contract && data.proposal_open_contract.is_sold) {
         const poc = data.proposal_open_contract;
         const profit = parseFloat(poc.profit);
+        const contractId = poc.contract_id;
 
         // Identifica qual contrato encerrou
-        if (this.tradingState.contractId && poc.contract_id === this.tradingState.contractId) {
+        if (this.tradingState.contractId && contractId === this.tradingState.contractId) {
           this.handleEvenOddTradeResult(profit > 0, profit);
-        } else if (this.digitDifferState.contractId && poc.contract_id === this.digitDifferState.contractId) {
+        } else if (this.digitDifferState.contractId && contractId === this.digitDifferState.contractId) {
           this.handleDigitDifferResult(profit > 0, profit);
         }
       }
@@ -176,7 +176,7 @@ export class DerivClient {
     const lastDigit = priceStr.charAt(priceStr.length - 1);
     
     this.digitHistory[symbol].push(lastDigit);
-    if (this.digitHistory[symbol].length > 20) {
+    if (this.digitHistory[symbol].length > 10) {
       this.digitHistory[symbol].shift();
     }
 
@@ -293,7 +293,6 @@ export class DerivClient {
     const sessionProfitLoss = this.tradingState.sessionTrades.reduce((sum, t) => sum + t.profit, 0);
     
     if (isWin) {
-      // CORRIGIDO: Adiciona sessão ao histórico ANTES de resetar
       this.addSessionToHistory(true, sessionProfitLoss);
       
       const message = `
@@ -309,7 +308,6 @@ export class DerivClient {
       this.resetTradingStateEvenOdd();
       
     } else if (this.tradingState.attemptNumber >= this.tradingState.maxAttempts) {
-      // CORRIGIDO: Adiciona sessão ao histórico ANTES de resetar
       this.addSessionToHistory(false, sessionProfitLoss);
       
       const summary = this.generateSummaryOnMaxLoss(sessionProfitLoss);
@@ -349,21 +347,27 @@ export class DerivClient {
     };
   }
 
-  // --------- ESTRATÉGIA DIGIT DIFFERS (NOVA) ---------
+  // --------- ESTRATÉGIA DIGIT DIFFERS (CORRIGIDA) ---------
   analyzePatternDigitDiffer(symbol) {
     const history = this.digitHistory[symbol];
-    if (history.length < 3) {
+    
+    // CORRIGIDO: Precisa ter 10 dígitos para analisar os últimos 3
+    if (history.length < 10) {
       return { isOpportunity: false };
     }
 
-    // Verifica os 3 últimos dígitos
-    const last3 = history.slice(-3);
-    if (last3[0] === last3[1] && last3[1] === last3[2]) {
-      const digit = last3[2];
+    // CORRIGIDO: Pega os últimos 10 dígitos, depois analisa os 3 últimos desses 10
+    const last10 = history.slice(-10);
+    const last3OfLast10 = last10.slice(-3);
+    
+    // Verifica se os 3 últimos são iguais
+    if (last3OfLast10[0] === last3OfLast10[1] && last3OfLast10[1] === last3OfLast10[2]) {
+      const digit = last3OfLast10[2];
       return {
         isOpportunity: true,
         predictionDigit: digit,
-        repetitionCount: 3
+        repetitionCount: 3,
+        sequence: last10.join(',')
       };
     }
 
@@ -387,7 +391,8 @@ export class DerivClient {
 🎯 *Oportunidade Detectada (Digit Differs)!*
 
 📊 Ativo: ${this.symbols[symbol].name}
-🔢 Dígito repetido 3x: *${predictionDigit}*
+🔢 Sequência: ${patternInfo.sequence}
+🎲 Últimos 3 dígitos: *${predictionDigit}, ${predictionDigit}, ${predictionDigit}*
 💰 Entrada: *DIGITDIFF* (diferente de ${predictionDigit})
 💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
     `;
@@ -417,7 +422,7 @@ export class DerivClient {
   }
 
   handleDigitDifferResult(isWin, profit) {
-    // Aqui não há sessão nem martingale, apenas log e reset
+    // CORRIGIDO: Agora mostra corretamente win ou loss
     const message = isWin
       ? `
 ✅ *Trade Vencedor (Digit Differs)!*
@@ -430,6 +435,7 @@ export class DerivClient {
       : `
 ❌ *Trade Perdido (Digit Differs)*
 
+💸 Perda: ${this.balance.currency} ${Math.abs(profit).toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
 🎯 Meta: ${this.goalPercentage}%

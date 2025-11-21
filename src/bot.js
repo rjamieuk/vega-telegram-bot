@@ -273,7 +273,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
           `🔢 *Estratégia Digit Differs*\n\n` +
           `Estado atual: *${currentlyOn ? 'Ativado' : 'Desativado'}*\n\n` +
           `- Usa 5% do capital por entrada, sem gale.\n` +
-          `- Opera quando um dígito se repete 3x em sequência.\n` +
+          `- Opera quando os últimos 3 dígitos da sequência de 10 são iguais.\n` +
           `- O lucro conta para a mesma meta global.\n\n` +
           `Escolha uma opção:`,
           { parse_mode: 'Markdown', ...keyboard }
