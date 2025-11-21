@@ -28,7 +28,9 @@ export class VegaBot {
       const welcomeMessage = `
 🎯 *Bem-vindo ao Vega Monitor Trading System*
 
-Sou um robô automatizado que opera na Deriv usando estratégia de padrões Even/Odd em índices de volatilidade.
+Sou um robô automatizado que opera na Deriv usando:
+- Estratégia de padrões Even/Odd em índices de volatilidade
+- (Opcional) Estratégia Digit Differs por repetição de dígitos
 
 *Como funcionar:*
 1️⃣ Configure seu token da Deriv: /config
@@ -37,7 +39,7 @@ Sou um robô automatizado que opera na Deriv usando estratégia de padrões Even
 4️⃣ Pare a sessão: /stop
 
 *Comandos disponíveis:*
-/config - Configurar token, meta e risco
+/config - Configurar token, meta, risco e Digit Differs
 /session - Iniciar nova sessão
 /status - Ver status atual
 /stop - Parar sessão ativa
@@ -57,7 +59,7 @@ Sou um robô automatizado que opera na Deriv usando estratégia de padrões Even
 
 *Comandos:*
 /start - Mensagem de boas-vindas
-/config - Configurar token Deriv, meta % e máx. loss
+/config - Configurar token Deriv, meta %, máx. loss e Digit Differs
 /session - Iniciar sessão de trading
 /status - Ver status da sessão atual
 /stop - Parar sessão ativa
@@ -67,13 +69,16 @@ Sou um robô automatizado que opera na Deriv usando estratégia de padrões Even
 1. Use /config
 2. Envie seu API token da Deriv
 3. Defina sua meta de crescimento (%)
-4. Defina o máximo de loss (1-6)
+4. Defina o máximo de loss (1-6) para estratégia Even/Odd
+5. Escolha se deseja ativar a estratégia Digit Differs
 
 *Como operar:*
 1. Use /session para iniciar
 2. O bot detecta padrões automaticamente
-3. Executa trades com martingale
-4. Para ao atingir meta ou limite de perdas
+   - Even/Odd com martingale e limite de losses
+   - (Opcional) Digit Differs com 5% de stake sem gale
+3. O lucro de qualquer estratégia conta para a mesma meta
+4. Para ao atingir meta ou limite de perdas da estratégia Even/Odd
 
 *Suporte:*
 Em caso de dúvidas, entre em contato com o desenvolvedor.
@@ -92,6 +97,7 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
             [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
             [{ text: '🎯 Configurar Meta %', callback_data: 'config_goal' }],
             [{ text: '❌ Máx. Loss (1–6)', callback_data: 'config_max_loss' }],
+            [{ text: '🔢 Estratégia Digit Differs', callback_data: 'config_digit_diff' }],
             [{ text: '📊 Ver Configuração', callback_data: 'view_config' }]
           ]
         }
@@ -146,11 +152,12 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
 📊 *Crescimento:* ${status.growth.toFixed(2)}%
 🎯 *Meta:* ${status.goalPercentage}%
 
-📋 *Sessões:* ${status.totalSessions}
+📋 *Sessões (Even/Odd):* ${status.totalSessions}
 ✅ *Vitórias:* ${status.winSessions}
 ❌ *Derrotas:* ${status.lossSessions}
 📊 *Taxa de Vitória:* ${status.winRate.toFixed(2)}%
 
+🧠 *Digit Differs:* ${status.useDigitDifferStrategy ? '✅ Ativado' : '❌ Desativado'}
 ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportunidades...*'}
       `;
       
@@ -215,7 +222,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
       
       if (data === 'config_max_loss') {
         this.bot.sendMessage(chatId,
-          '❌ *Máximo de Loss por Sessão*\n\n' +
+          '❌ *Máximo de Loss por Sessão (Even/Odd)*\n\n' +
           'Envie um número entre 1 e 6.\n\n' +
           '*Riscos aproximados:*\n' +
           '1 → 0.5%\n' +
@@ -247,6 +254,41 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
         };
         this.bot.on('message', listener);
       }
+
+      if (data === 'config_digit_diff') {
+        const user = this.userStore.getUser(chatId) || {};
+        const currentlyOn = !!user.useDigitDifferStrategy;
+
+        const keyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Ativar Digit Differs', callback_data: 'digit_diff_on' }],
+              [{ text: '❌ Desativar Digit Differs', callback_data: 'digit_diff_off' }]
+            ]
+          }
+        };
+
+        this.bot.sendMessage(
+          chatId,
+          `🔢 *Estratégia Digit Differs*\n\n` +
+          `Estado atual: *${currentlyOn ? 'Ativado' : 'Desativado'}*\n\n` +
+          `- Usa 5% do capital por entrada, sem gale.\n` +
+          `- Opera quando um dígito se repete 3x em sequência.\n` +
+          `- O lucro conta para a mesma meta global.\n\n` +
+          `Escolha uma opção:`,
+          { parse_mode: 'Markdown', ...keyboard }
+        );
+      }
+
+      if (data === 'digit_diff_on') {
+        this.userStore.setUseDigitDifferStrategy(chatId, true);
+        this.bot.sendMessage(chatId, '✅ Estratégia Digit Differs *ativada*.', { parse_mode: 'Markdown' });
+      }
+
+      if (data === 'digit_diff_off') {
+        this.userStore.setUseDigitDifferStrategy(chatId, false);
+        this.bot.sendMessage(chatId, '❌ Estratégia Digit Differs *desativada*.', { parse_mode: 'Markdown' });
+      }
       
       if (data === 'view_config') {
         const user = this.userStore.getUser(chatId);
@@ -258,13 +300,15 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
         
         const maxLosses = user.maxLosses ?? 6;
         const risk = riskByMaxLoss[maxLosses] ?? 31.0;
+        const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
 
         const configMessage = `
 ⚙️ *Suas Configurações*
 
 🔑 *Token:* ${user.derivToken ? '✅ Configurado' : '❌ Não configurado'}
 🎯 *Meta:* ${user.goalPercentage ? `${user.goalPercentage}%` : '❌ Não configurada'}
-❌ *Máx. Loss:* ${maxLosses} (Risco ~ ${risk}%)
+❌ *Máx. Loss (Even/Odd):* ${maxLosses} (Risco ~ ${risk}%)
+🔢 *Digit Differs:* ${useDigitDifferStrategy ? '✅ Ativado' : '❌ Desativado'}
 
 ${(!user.derivToken || !user.goalPercentage) ? '\n⚠️ Configure todos os itens antes de iniciar uma sessão.' : '\n✅ Tudo pronto! Use /session para iniciar.'}
         `;

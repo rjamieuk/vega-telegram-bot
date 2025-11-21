@@ -1,12 +1,13 @@
 import WebSocket from 'ws';
 
 export class DerivClient {
-  constructor(token, goalPercentage, maxLosses, chatId, bot) {
+  constructor(token, goalPercentage, maxLosses, chatId, bot, useDigitDifferStrategy = false) {
     this.token = token;
     this.goalPercentage = goalPercentage;
     this.maxLosses = maxLosses ?? 6;
     this.chatId = chatId;
     this.bot = bot;
+    this.useDigitDifferStrategy = useDigitDifferStrategy;
     
     this.ws = null;
     this.isConnected = false;
@@ -16,6 +17,7 @@ export class DerivClient {
     this.sessionHistory = [];
     this.startTime = Date.now();
     
+    // Estado de trading para estratégia Even/Odd (com martingale, sessões, etc.)
     this.tradingState = {
       isActive: false,
       currentSymbol: null,
@@ -26,6 +28,15 @@ export class DerivClient {
       maxAttempts: this.maxLosses,
       contractId: null,
       sessionTrades: []
+    };
+
+    // Estado de trading separado para estratégia Digit Differs (sem gale, stake fixo 5%)
+    this.digitDifferState = {
+      isActive: false,
+      currentSymbol: null,
+      predictionDigit: null,
+      stake: 0,
+      contractId: null
     };
     
     // CORRIGIDO: Adicionados Volatility 30 e 90 com 3 casas decimais
@@ -104,23 +115,52 @@ export class DerivClient {
       this.handleTick(data.tick);
     }
 
-    if (data.msg_type === 'proposal' && this.tradingState.isActive && data.proposal) {
-      this.buyContract(data.proposal.id);
+    if (data.msg_type === 'proposal') {
+      // Checa a qual estratégia pertence essa proposta
+      if (this.tradingState.isActive && data.echo_req && data.echo_req.contract_type && (data.echo_req.contract_type === 'DIGITEVEN' || data.echo_req.contract_type === 'DIGITODD')) {
+        // Estratégia Even/Odd
+        if (data.proposal) {
+          this.buyEvenOddContract(data.proposal.id);
+        }
+      } else if (this.digitDifferState.isActive && data.echo_req && data.echo_req.contract_type === 'DIGITDIFF') {
+        // Estratégia Digit Differs
+        if (data.proposal) {
+          this.buyDigitDifferContract(data.proposal.id);
+        }
+      }
     }
 
     if (data.msg_type === 'buy' && data.buy) {
-      this.tradingState.contractId = data.buy.contract_id;
-      this.ws.send(JSON.stringify({
-        proposal_open_contract: 1,
-        contract_id: this.tradingState.contractId,
-        subscribe: 1
-      }));
+      const contractId = data.buy.contract_id;
+      // Descobre qual estado está ativo
+      if (this.tradingState.isActive && !this.tradingState.contractId) {
+        this.tradingState.contractId = contractId;
+        this.ws.send(JSON.stringify({
+          proposal_open_contract: 1,
+          contract_id: this.tradingState.contractId,
+          subscribe: 1
+        }));
+      } else if (this.digitDifferState.isActive && !this.digitDifferState.contractId) {
+        this.digitDifferState.contractId = contractId;
+        this.ws.send(JSON.stringify({
+          proposal_open_contract: 1,
+          contract_id: this.digitDifferState.contractId,
+          subscribe: 1
+        }));
+      }
     }
 
     if (data.msg_type === 'proposal_open_contract') {
       if (data.proposal_open_contract && data.proposal_open_contract.is_sold) {
-        const profit = parseFloat(data.proposal_open_contract.profit);
-        this.handleTradeResult(profit > 0, profit);
+        const poc = data.proposal_open_contract;
+        const profit = parseFloat(poc.profit);
+
+        // Identifica qual contrato encerrou
+        if (this.tradingState.contractId && poc.contract_id === this.tradingState.contractId) {
+          this.handleEvenOddTradeResult(profit > 0, profit);
+        } else if (this.digitDifferState.contractId && poc.contract_id === this.digitDifferState.contractId) {
+          this.handleDigitDifferResult(profit > 0, profit);
+        }
       }
     }
   }
@@ -136,18 +176,34 @@ export class DerivClient {
     const lastDigit = priceStr.charAt(priceStr.length - 1);
     
     this.digitHistory[symbol].push(lastDigit);
-    if (this.digitHistory[symbol].length > 10) {
+    if (this.digitHistory[symbol].length > 20) {
       this.digitHistory[symbol].shift();
     }
+
+    // Se já existe qualquer trade ativo (Even/Odd OU DigitDiffers), não abre outro
+    const anyTradeActive = this.tradingState.isActive || this.digitDifferState.isActive;
+    if (anyTradeActive) {
+      return;
+    }
     
-    const pattern = this.analyzePattern(symbol);
-    
-    if (pattern.isOpportunity && !this.tradingState.isActive) {
-      this.executeTrade(symbol, pattern.suggestion);
+    // 1) Oportunidades Even/Odd (lógica original)
+    const pattern = this.analyzePatternEvenOdd(symbol);
+    if (pattern.isOpportunity) {
+      this.executeEvenOddTrade(symbol, pattern.suggestion, pattern);
+      return;
+    }
+
+    // 2) Oportunidades Digit Differs (se habilitado)
+    if (this.useDigitDifferStrategy) {
+      const diffPattern = this.analyzePatternDigitDiffer(symbol);
+      if (diffPattern.isOpportunity) {
+        this.executeDigitDifferTrade(symbol, diffPattern.predictionDigit, diffPattern);
+      }
     }
   }
 
-  analyzePattern(symbol) {
+  // --------- ESTRATÉGIA EVEN/ODD (original) ---------
+  analyzePatternEvenOdd(symbol) {
     const history = this.digitHistory[symbol];
     
     if (history.length < 10) {
@@ -172,7 +228,7 @@ export class DerivClient {
     return { type: 'MIXED', count: 0, isOpportunity: false };
   }
 
-  executeTrade(symbol, tradeType) {
+  executeEvenOddTrade(symbol, tradeType, patternInfo) {
     if (!this.isConnected) return;
     
     if (this.tradingState.baseStake === 0) {
@@ -184,10 +240,10 @@ export class DerivClient {
     this.tradingState.isActive = true;
     this.tradingState.currentSymbol = symbol;
     this.tradingState.currentType = tradeType;
-    this.tradingState.currentStake = this.calculateStake();
+    this.tradingState.currentStake = this.calculateStakeEvenOdd();
     
     const message = `
-🎯 *Oportunidade Detectada!*
+🎯 *Oportunidade Detectada (Even/Odd)!*
 
 📊 Ativo: ${this.symbols[symbol].name}
 🔢 Padrão: 10x ${tradeType === 'even' ? 'ÍMPARES' : 'PARES'}
@@ -212,19 +268,19 @@ export class DerivClient {
     this.ws.send(JSON.stringify(proposal));
   }
 
-  calculateStake() {
+  calculateStakeEvenOdd() {
     const stake = this.tradingState.baseStake * Math.pow(2, this.tradingState.attemptNumber);
     return Math.round(stake * 100) / 100;
   }
 
-  buyContract(proposalId) {
+  buyEvenOddContract(proposalId) {
     this.ws.send(JSON.stringify({
       buy: proposalId,
       price: this.tradingState.currentStake
     }));
   }
 
-  handleTradeResult(isWin, profit) {
+  handleEvenOddTradeResult(isWin, profit) {
     this.tradingState.sessionTrades.push({
       attemptNumber: this.tradingState.attemptNumber + 1,
       stake: this.tradingState.currentStake,
@@ -241,7 +297,7 @@ export class DerivClient {
       this.addSessionToHistory(true, sessionProfitLoss);
       
       const message = `
-✅ *Trade Vencedor!*
+✅ *Trade Vencedor (Even/Odd)!*
 
 💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfitLoss.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
@@ -250,7 +306,7 @@ export class DerivClient {
       `;
       
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-      this.resetTradingState();
+      this.resetTradingStateEvenOdd();
       
     } else if (this.tradingState.attemptNumber >= this.tradingState.maxAttempts) {
       // CORRIGIDO: Adiciona sessão ao histórico ANTES de resetar
@@ -259,27 +315,27 @@ export class DerivClient {
       const summary = this.generateSummaryOnMaxLoss(sessionProfitLoss);
       this.bot.sendMessage(this.chatId, summary, { parse_mode: 'Markdown' });
       
-      this.resetTradingState();
+      this.resetTradingStateEvenOdd();
       this.disconnect();
       
     } else {
       const message = `
-❌ *Trade Perdido*
+❌ *Trade Perdido (Even/Odd)*
 
 🔄 Tentando novamente com stake dobrado...
-💵 Próximo Stake: ${this.balance.currency} ${this.calculateStake().toFixed(2)}
+💵 Próximo Stake: ${this.balance.currency} ${this.calculateStakeEvenOdd().toFixed(2)}
 🔢 Tentativa: ${this.tradingState.attemptNumber + 1}/${this.tradingState.maxAttempts}
       `;
       
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
       
       setTimeout(() => {
-        this.executeTrade(this.tradingState.currentSymbol, this.tradingState.currentType);
+        this.executeEvenOddTrade(this.tradingState.currentSymbol, this.tradingState.currentType);
       }, 500);
     }
   }
 
-  resetTradingState() {
+  resetTradingStateEvenOdd() {
     this.tradingState = {
       isActive: false,
       currentSymbol: null,
@@ -293,6 +349,109 @@ export class DerivClient {
     };
   }
 
+  // --------- ESTRATÉGIA DIGIT DIFFERS (NOVA) ---------
+  analyzePatternDigitDiffer(symbol) {
+    const history = this.digitHistory[symbol];
+    if (history.length < 3) {
+      return { isOpportunity: false };
+    }
+
+    // Verifica os 3 últimos dígitos
+    const last3 = history.slice(-3);
+    if (last3[0] === last3[1] && last3[1] === last3[2]) {
+      const digit = last3[2];
+      return {
+        isOpportunity: true,
+        predictionDigit: digit,
+        repetitionCount: 3
+      };
+    }
+
+    return { isOpportunity: false };
+  }
+
+  executeDigitDifferTrade(symbol, predictionDigit, patternInfo) {
+    if (!this.isConnected) return;
+
+    // 5% do capital, sem gale
+    let stake = this.balance.current * 0.05;
+    if (stake < 0.5) stake = 0.5;
+    stake = Math.round(stake * 100) / 100;
+
+    this.digitDifferState.isActive = true;
+    this.digitDifferState.currentSymbol = symbol;
+    this.digitDifferState.predictionDigit = predictionDigit;
+    this.digitDifferState.stake = stake;
+
+    const message = `
+🎯 *Oportunidade Detectada (Digit Differs)!*
+
+📊 Ativo: ${this.symbols[symbol].name}
+🔢 Dígito repetido 3x: *${predictionDigit}*
+💰 Entrada: *DIGITDIFF* (diferente de ${predictionDigit})
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+    `;
+
+    this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+    const proposal = {
+      proposal: 1,
+      amount: this.digitDifferState.stake,
+      basis: 'stake',
+      contract_type: 'DIGITDIFF',
+      currency: this.balance.currency,
+      duration: 1,
+      duration_unit: 't',
+      symbol: symbol,
+      barrier: predictionDigit
+    };
+
+    this.ws.send(JSON.stringify(proposal));
+  }
+
+  buyDigitDifferContract(proposalId) {
+    this.ws.send(JSON.stringify({
+      buy: proposalId,
+      price: this.digitDifferState.stake
+    }));
+  }
+
+  handleDigitDifferResult(isWin, profit) {
+    // Aqui não há sessão nem martingale, apenas log e reset
+    const message = isWin
+      ? `
+✅ *Trade Vencedor (Digit Differs)!*
+
+💰 Lucro: ${this.balance.currency} ${profit.toFixed(2)}
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
+🎯 Meta: ${this.goalPercentage}%
+      `
+      : `
+❌ *Trade Perdido (Digit Differs)*
+
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
+🎯 Meta: ${this.goalPercentage}%
+      `;
+
+    this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+    // Independente de win ou loss, só volta a observar
+    this.resetDigitDifferState();
+  }
+
+  resetDigitDifferState() {
+    this.digitDifferState = {
+      isActive: false,
+      currentSymbol: null,
+      predictionDigit: null,
+      stake: 0,
+      contractId: null
+    };
+  }
+
+  // --------- FUNÇÕES COMUNS ---------
   addSessionToHistory(isWin, profitLoss) {
     this.sessionHistory.push({
       timestamp: new Date().toISOString(),
@@ -335,7 +494,7 @@ export class DerivClient {
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🎯 *Meta:* ${this.goalPercentage}%
 
-📋 *Total de Sessões:* ${totalSessions}
+📋 *Total de Sessões (Even/Odd):* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -353,7 +512,7 @@ export class DerivClient {
     const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
 
     return `
-🛑 *Sessão Encerrada por Máximo de Loss*
+🛑 *Sessão Encerrada por Máximo de Loss (Even/Odd)*
 
 ⏱ *Tempo de Execução:* ${executionTime}
 💰 *Saldo Inicial:* ${this.balance.currency} ${this.balance.initial.toFixed(2)}
@@ -362,7 +521,7 @@ export class DerivClient {
 📊 *Crescimento:* ${growth.toFixed(2)}%
 ❌ *Última Sessão:* ${this.balance.currency} ${sessionProfitLoss.toFixed(2)}
 
-📋 *Total de Sessões:* ${totalSessions}
+📋 *Total de Sessões (Even/Odd):* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -398,7 +557,8 @@ Use /session para iniciar uma nova sessão quando desejar.
       winSessions: winSessions,
       lossSessions: totalSessions - winSessions,
       winRate: winRate,
-      isTrading: this.tradingState.isActive
+      isTrading: this.tradingState.isActive || this.digitDifferState.isActive,
+      useDigitDifferStrategy: this.useDigitDifferStrategy
     };
   }
 

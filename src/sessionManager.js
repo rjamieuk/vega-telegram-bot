@@ -20,13 +20,15 @@ export class SessionManager {
     }
 
     const maxLosses = user.maxLosses ?? 6;
+    const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
 
     const client = new DerivClient(
       user.derivToken,
       user.goalPercentage,
       maxLosses,
       chatId,
-      this.bot
+      this.bot,
+      useDigitDifferStrategy
     );
 
     this.sessions.set(chatId, client);
@@ -38,7 +40,8 @@ export class SessionManager {
 🚀 *Sessão Iniciada!*
 
 🎯 Meta: ${user.goalPercentage}%
-❌ Máx. Loss: ${maxLosses} (Risco ~ ${risk}%)
+❌ Máx. Loss (Even/Odd): ${maxLosses} (Risco ~ ${risk}%)
+🧠 Estratégia Digit Differs: ${useDigitDifferStrategy ? '✅ Ativada' : '❌ Desativada'}
 👀 Observando oportunidades...
 
 Use /status para acompanhar

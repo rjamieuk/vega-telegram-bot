@@ -62,4 +62,12 @@ export class UserStore {
     this.users[chatId].maxLosses = maxLosses;
     this.save();
   }
+
+  setUseDigitDifferStrategy(chatId, value) {
+    if (!this.users[chatId]) {
+      this.users[chatId] = {};
+    }
+    this.users[chatId].useDigitDifferStrategy = !!value;
+    this.save();
+  }
 }
