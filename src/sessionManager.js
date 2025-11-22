@@ -13,7 +13,7 @@ export class SessionManager {
 
   async startSession(chatId) {
     const user = this.userStore.getUser(chatId);
-    
+  
     if (!user || !user.derivToken || !user.goalPercentage) {
       this.bot.sendMessage(chatId, '❌ Configuração incompleta. Use /config');
       return;
