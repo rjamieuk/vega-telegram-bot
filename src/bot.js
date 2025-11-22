@@ -76,7 +76,7 @@ Sou um robô automatizado que opera na Deriv usando:
 1. Use /session para iniciar
 2. O bot detecta padrões automaticamente
    - Even/Odd com martingale e limite de losses
-   - (Opcional) Digit Differs com 5% de stake sem gale
+   - (Opcional) Digit Differs com 5% de stake sem gale (4 dígitos consecutivos)
 3. O lucro de qualquer estratégia conta para a mesma meta
 4. Para ao atingir meta ou limite de perdas da estratégia Even/Odd
 
@@ -273,7 +273,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
           `🔢 *Estratégia Digit Differs*\n\n` +
           `Estado atual: *${currentlyOn ? 'Ativado' : 'Desativado'}*\n\n` +
           `- Usa 5% do capital por entrada, sem gale.\n` +
-          `- Opera quando os últimos 3 dígitos da sequência de 10 são iguais.\n` +
+          `- Opera quando os últimos 4 dígitos da sequência de 10 são iguais.\n` +
           `- O lucro conta para a mesma meta global.\n\n` +
           `Escolha uma opção:`,
           { parse_mode: 'Markdown', ...keyboard }
@@ -308,7 +308,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
 🔑 *Token:* ${user.derivToken ? '✅ Configurado' : '❌ Não configurado'}
 🎯 *Meta:* ${user.goalPercentage ? `${user.goalPercentage}%` : '❌ Não configurada'}
 ❌ *Máx. Loss (Even/Odd):* ${maxLosses} (Risco ~ ${risk}%)
-🔢 *Digit Differs:* ${useDigitDifferStrategy ? '✅ Ativado' : '❌ Desativado'}
+🔢 *Digit Differs:* ${useDigitDifferStrategy ? '✅ Ativado (4 dígitos)' : '❌ Desativado'}
 
 ${(!user.derivToken || !user.goalPercentage) ? '\n⚠️ Configure todos os itens antes de iniciar uma sessão.' : '\n✅ Tudo pronto! Use /session para iniciar.'}
         `;
