@@ -115,7 +115,12 @@ export class DerivClient {
     }
 
     if (data.msg_type === 'proposal' && data.proposal) {
-      this.buyContract(data.proposal.id);
+      // A proposta é para Even/Odd ou Digit Differs?
+      if (data.echo_req && (data.echo_req.contract_type === 'DIGITEVEN' || data.echo_req.contract_type === 'DIGITODD')) {
+        this.buyContract(data.proposal.id, this.tradingState.currentStake);
+      } else if (data.echo_req && data.echo_req.contract_type === 'DIGITDIFF') {
+        this.buyContract(data.proposal.id, this.digitDifferState.stake);
+      }
     }
 
     if (data.msg_type === 'buy' && data.buy) {
@@ -268,10 +273,10 @@ export class DerivClient {
     return Math.round(stake * 100) / 100;
   }
 
-  buyContract(proposalId) {
+  buyContract(proposalId, stakeAmount) {
     this.ws.send(JSON.stringify({
       buy: proposalId,
-      price: 0 // CORREÇÃO: Definir price como 0 para comprar pelo preço de mercado
+      price: stakeAmount // CORREÇÃO: Enviar o valor do stake aqui
     }));
   }
 
