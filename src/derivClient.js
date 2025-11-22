@@ -27,7 +27,6 @@ export class DerivClient {
       currentStake: 0,
       maxAttempts: this.maxLosses,
       contractId: null,
-      proposalId: null,
       sessionTrades: []
     };
 
@@ -37,8 +36,7 @@ export class DerivClient {
       currentSymbol: null,
       predictionDigit: null,
       stake: 0,
-      contractId: null,
-      proposalId: null
+      contractId: null
     };
     
     this.symbols = {
@@ -118,14 +116,16 @@ export class DerivClient {
     }
 
     if (data.msg_type === 'proposal' && data.proposal) {
-      // Armazena o proposal ID e compra imediatamente
-      if (data.echo_req && (data.echo_req.contract_type === 'DIGITEVEN' || data.echo_req.contract_type === 'DIGITODD')) {
-        this.tradingState.proposalId = data.proposal.id;
-        this.buyEvenOddContract(data.proposal.id);
-      } else if (data.echo_req && data.echo_req.contract_type === 'DIGITDIFF') {
-        this.digitDifferState.proposalId = data.proposal.id;
-        this.buyDigitDifferContract(data.proposal.id);
-      }
+      // Compra o contrato imediatamente sem enviar price
+      const proposalId = data.proposal.id;
+      
+      console.log(`[${this.chatId}] Proposta recebida: ${proposalId}`);
+      
+      // Compra sem especificar price (usa o ask_price da proposta automaticamente)
+      this.ws.send(JSON.stringify({
+        buy: proposalId,
+        price: data.proposal.ask_price // USA O ASK_PRICE DA PROPOSTA
+      }));
     }
 
     if (data.msg_type === 'buy' && data.buy) {
@@ -152,10 +152,11 @@ export class DerivClient {
     if (data.msg_type === 'proposal_open_contract') {
       const poc = data.proposal_open_contract;
       
-      console.log(`[${this.chatId}] proposal_open_contract recebido:`, {
+      console.log(`[${this.chatId}] proposal_open_contract:`, {
         contract_id: poc.contract_id,
         is_sold: poc.is_sold,
-        status: poc.status
+        status: poc.status,
+        profit: poc.profit
       });
       
       if (poc && poc.is_sold) {
@@ -165,17 +166,13 @@ export class DerivClient {
 
         console.log(`[${this.chatId}] Contrato finalizado: ${contractId} (${contractType}) - Profit: ${profit}`);
 
-        // Identifica qual estratégia pelo contract_type
-        if (contractType === 'DIGITEVEN' || contractType === 'DIGITODD') {
-          if (this.tradingState.contractId === contractId) {
-            console.log(`[${this.chatId}] Processando resultado Even/Odd`);
-            this.handleEvenOddTradeResult(profit > 0, profit);
-          }
-        } else if (contractType === 'DIGITDIFF') {
-          if (this.digitDifferState.contractId === contractId) {
-            console.log(`[${this.chatId}] Processando resultado Digit Differs`);
-            this.handleDigitDifferResult(profit > 0, profit);
-          }
+        // Identifica qual estratégia pelo contractId armazenado
+        if (this.tradingState.contractId === contractId) {
+          console.log(`[${this.chatId}] Processando resultado Even/Odd`);
+          this.handleEvenOddTradeResult(profit > 0, profit);
+        } else if (this.digitDifferState.contractId === contractId) {
+          console.log(`[${this.chatId}] Processando resultado Digit Differs`);
+          this.handleDigitDifferResult(profit > 0, profit);
         }
       }
     }
@@ -290,20 +287,6 @@ export class DerivClient {
     return Math.round(stake * 100) / 100;
   }
 
-  buyEvenOddContract(proposalId) {
-    this.ws.send(JSON.stringify({
-      buy: proposalId,
-      price: this.tradingState.currentStake
-    }));
-  }
-
-  buyDigitDifferContract(proposalId) {
-    this.ws.send(JSON.stringify({
-      buy: proposalId,
-      price: this.digitDifferState.stake
-    }));
-  }
-
   handleEvenOddTradeResult(isWin, profit) {
     console.log(`[${this.chatId}] handleEvenOddTradeResult - isWin: ${isWin}, profit: ${profit}`);
     
@@ -354,9 +337,8 @@ export class DerivClient {
       
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
       
-      // Reseta apenas o contractId e proposalId para permitir nova compra
+      // Reseta apenas o contractId para permitir nova compra
       this.tradingState.contractId = null;
-      this.tradingState.proposalId = null;
       
       setTimeout(() => {
         this.executeEvenOddTrade(this.tradingState.currentSymbol, this.tradingState.currentType, {});
@@ -375,7 +357,6 @@ export class DerivClient {
       currentStake: 0,
       maxAttempts: this.maxLosses,
       contractId: null,
-      proposalId: null,
       sessionTrades: []
     };
   }
@@ -481,8 +462,7 @@ export class DerivClient {
       currentSymbol: null,
       predictionDigit: null,
       stake: 0,
-      contractId: null,
-      proposalId: null
+      contractId: null
     };
   }
 
