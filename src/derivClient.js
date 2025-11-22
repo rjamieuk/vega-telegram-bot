@@ -131,20 +131,24 @@ export class DerivClient {
 
     if (data.msg_type === 'buy' && data.buy) {
       const contractId = data.buy.contract_id;
-      const contractType = data.buy.contract_type;
+      const contractType = data.buy.contract_type; // pode vir undefined
     
-      console.log(`[${this.chatId}] ✅ Contrato comprado: ${contractId} (${contractType})`);
-    
-      // CRÍTICO: Armazena o contractId ANTES de subscrever
-      if (contractType === 'DIGITEVEN' || contractType === 'DIGITODD') {
+      console.log(
+        `[${this.chatId}] ✅ Contrato comprado: ${contractId} (${contractType}) ` +
+        `| estados: EvenOdd.isActive=${this.tradingState.isActive}, DigitDiff.isActive=${this.digitDifferState.isActive}`
+      );
+
+      // ASSOCIAÇÃO PELO ESTADO ATIVO, NÃO PELO contract_type
+      if (this.tradingState.isActive && !this.digitDifferState.isActive) {
+        // Even/Odd
         this.tradingState.contractId = contractId;
-        
         console.log(`[${this.chatId}] 🔵 Armazenado contractId Even/Odd: ${contractId}`);
-        
+
         // Timeout de segurança
         this.tradingState.timeoutId = setTimeout(() => {
-          console.log(`[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} não retornou resultado em 15s`);
-          this.bot.sendMessage(this.chatId, 
+          console.log(`[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} (Even/Odd) não retornou resultado em 15s`);
+          this.bot.sendMessage(
+            this.chatId,
             `⚠️ *Timeout no contrato Even/Odd*\n\n` +
             `O contrato ${contractId} não retornou resultado.\n` +
             `Resetando estado para continuar operando...`,
@@ -152,16 +156,17 @@ export class DerivClient {
           );
           this.resetTradingStateEvenOdd();
         }, 15000);
-        
-      } else if (contractType === 'DIGITDIFF') {
+
+      } else if (this.digitDifferState.isActive && !this.tradingState.isActive) {
+        // Digit Differs
         this.digitDifferState.contractId = contractId;
-        
         console.log(`[${this.chatId}] 🟣 Armazenado contractId Digit Differs: ${contractId}`);
-        
+
         // Timeout de segurança
         this.digitDifferState.timeoutId = setTimeout(() => {
-          console.log(`[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} não retornou resultado em 15s`);
-          this.bot.sendMessage(this.chatId,
+          console.log(`[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} (DigitDiff) não retornou resultado em 15s`);
+          this.bot.sendMessage(
+            this.chatId,
             `⚠️ *Timeout no contrato Digit Differs*\n\n` +
             `O contrato ${contractId} não retornou resultado.\n` +
             `Resetando estado para continuar operando...`,
@@ -169,6 +174,13 @@ export class DerivClient {
           );
           this.resetDigitDifferState();
         }, 15000);
+
+      } else {
+        // Situação estranha: nenhuma estratégia (ou ambas) marcadas como ativas
+        console.log(
+          `[${this.chatId}] ⚠️ BUY recebido mas não há estratégia claramente ativa. ` +
+          `EvenOdd.isActive=${this.tradingState.isActive}, DigitDiff.isActive=${this.digitDifferState.isActive}`
+        );
       }
     
       // Subscreve DEPOIS de armazenar o contractId
