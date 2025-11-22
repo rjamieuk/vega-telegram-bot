@@ -71,9 +71,10 @@ Sou um robô automatizado que opera na Deriv usando:
 2. Envie seu API token da Deriv
 3. Defina sua meta de crescimento (%)
 4. Defina o máximo de loss (1-6) para estratégia Even/Odd
-5. Escolha se deseja ativar martingale na estratégia Even/Odd
-6. Escolha se deseja ativar a estratégia Digit Differs
-7. Escolha se deseja ativar a estratégia Under/Over
+5. Defina o máximo de loss global (%) - opcional
+6. Escolha se deseja ativar martingale na estratégia Even/Odd
+7. Escolha se deseja ativar a estratégia Digit Differs
+8. Escolha se deseja ativar a estratégia Under/Over
 
 *Como operar:*
 1. Use /session para iniciar
@@ -82,7 +83,7 @@ Sou um robô automatizado que opera na Deriv usando:
    - (Opcional) Digit Differs com 5% de stake sem gale (4 dígitos consecutivos)
    - (Opcional) Under/Over com 1% de stake sem gale (10 dígitos > 6)
 3. O lucro de qualquer estratégia conta para a mesma meta
-4. Para ao atingir meta ou limite de perdas da estratégia Even/Odd (se martingale ativo)
+4. Para ao atingir meta, limite de perdas da estratégia Even/Odd (se martingale ativo) ou max loss global
 
 *Suporte:*
 Em caso de dúvidas, entre em contato com o desenvolvedor.
@@ -130,6 +131,8 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
         return;
       }
       
+      const globalLossText = status.maxGlobalLoss ? `\n🚨 *Max Loss Global:* -${Math.abs(status.maxGlobalLoss)}%` : '';
+      
       const statusMessage = `
 📊 *Status da Sessão*
 
@@ -138,7 +141,7 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
 💵 *Saldo Atual:* ${status.currency} ${status.currentBalance.toFixed(2)}
 📈 *Lucro:* ${status.currency} ${status.profit.toFixed(2)}
 📊 *Crescimento:* ${status.growth.toFixed(2)}%
-🎯 *Meta:* ${status.goalPercentage}%
+🎯 *Meta:* ${status.goalPercentage}%${globalLossText}
 
 📋 *Sessões (Even/Odd):* ${status.totalSessions}
 ✅ *Vitórias:* ${status.winSessions}
@@ -164,7 +167,13 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
       }
       
       this.sessionManager.stopSession(chatId);
-      this.bot.sendMessage(chatId, '🛑 Sessão encerrada com sucesso!');
+      this.bot.sendMessage(chatId, '🛑 Sessão encerrada com sucesso!', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
+          ]
+        }
+      });
     });
   }
 
@@ -175,6 +184,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
           [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
           [{ text: '🎯 Configurar Meta %', callback_data: 'config_goal' }],
           [{ text: '❌ Máx. Loss (1–6)', callback_data: 'config_max_loss' }],
+          [{ text: '🚨 Max Loss Global %', callback_data: 'config_global_loss' }],
           [{ text: '🔄 Martingale Even/Odd', callback_data: 'config_martingale' }],
           [{ text: '🔢 Estratégia Digit Differs', callback_data: 'config_digit_diff' }],
           [{ text: '📉 Estratégia Under/Over', callback_data: 'config_under_over' }],
@@ -206,7 +216,6 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
             this.bot.sendMessage(chatId, '✅ Token configurado com sucesso!');
             this.bot.removeListener('message', listener);
             
-            // Reaparece o menu
             setTimeout(() => this.showConfigMenu(chatId), 500);
           }
         };
@@ -231,7 +240,6 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
             this.bot.sendMessage(chatId, `✅ Meta configurada para ${goal}%`);
             this.bot.removeListener('message', listener);
             
-            // Reaparece o menu
             setTimeout(() => this.showConfigMenu(chatId), 500);
           }
         };
@@ -270,7 +278,40 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
             );
             this.bot.removeListener('message', listener);
             
-            // Reaparece o menu
+            setTimeout(() => this.showConfigMenu(chatId), 500);
+          }
+        };
+        this.bot.on('message', listener);
+      }
+
+      if (data === 'config_global_loss') {
+        this.bot.sendMessage(chatId,
+          '🚨 *Max Loss Global*\n\n' +
+          'Envie o percentual negativo máximo de crescimento antes de encerrar a operação.\n\n' +
+          'Exemplo: envie *5* para parar quando o crescimento atingir -5%.\n' +
+          'Envie *0* para desativar este limite.',
+          { parse_mode: 'Markdown' }
+        );
+
+        const listener = (msg) => {
+          if (msg.chat.id === chatId && !msg.text.startsWith('/')) {
+            const val = parseFloat(msg.text.trim());
+            if (isNaN(val) || val < 0) {
+              this.bot.sendMessage(chatId, '❌ Valor inválido. Envie um número positivo ou 0 para desativar.');
+              this.bot.removeListener('message', listener);
+              setTimeout(() => this.showConfigMenu(chatId), 500);
+              return;
+            }
+            
+            if (val === 0) {
+              this.userStore.setMaxGlobalLoss(chatId, null);
+              this.bot.sendMessage(chatId, '✅ Max Loss Global *desativado*.', { parse_mode: 'Markdown' });
+            } else {
+              this.userStore.setMaxGlobalLoss(chatId, val);
+              this.bot.sendMessage(chatId, `✅ Max Loss Global configurado para *-${val}%*.`, { parse_mode: 'Markdown' });
+            }
+            
+            this.bot.removeListener('message', listener);
             setTimeout(() => this.showConfigMenu(chatId), 500);
           }
         };
@@ -279,7 +320,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
 
       if (data === 'config_martingale') {
         const user = this.userStore.getUser(chatId) || {};
-        const currentlyOn = user.useMartingaleEvenOdd !== false; // default true
+        const currentlyOn = user.useMartingaleEvenOdd !== false;
 
         const keyboard = {
           reply_markup: {
@@ -394,6 +435,10 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
       if (data === 'back_to_menu') {
         this.showConfigMenu(chatId);
       }
+
+      if (data === 'back_to_config') {
+        this.showConfigMenu(chatId);
+      }
       
       if (data === 'view_config') {
         const user = this.userStore.getUser(chatId);
@@ -405,25 +450,65 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
         
         const maxLosses = user.maxLosses ?? 6;
         const risk = riskByMaxLoss[maxLosses] ?? 31.0;
+        const maxGlobalLoss = user.maxGlobalLoss ?? null;
         const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
         const useUnderOverStrategy = user.useUnderOverStrategy ?? false;
-        const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false; // default true
+        const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false;
+
+        const globalLossText = maxGlobalLoss ? `\n🚨 *Max Loss Global:* -${Math.abs(maxGlobalLoss)}%` : '\n🚨 *Max Loss Global:* ❌ Desativado';
 
         const configMessage = `
 ⚙️ *Suas Configurações*
 
 🔑 *Token:* ${user.derivToken ? '✅ Configurado' : '❌ Não configurado'}
 🎯 *Meta:* ${user.goalPercentage ? `${user.goalPercentage}%` : '❌ Não configurada'}
-❌ *Máx. Loss (Even/Odd):* ${maxLosses} (Risco ~ ${risk}%)
+❌ *Máx. Loss (Even/Odd):* ${maxLosses} (Risco ~ ${risk}%)${globalLossText}
 🔄 *Martingale Even/Odd:* ${useMartingaleEvenOdd ? '✅ Ativado' : '❌ Desativado'}
 🔢 *Digit Differs:* ${useDigitDifferStrategy ? '✅ Ativado (4 dígitos)' : '❌ Desativado'}
 📉 *Under/Over:* ${useUnderOverStrategy ? '✅ Ativado (10 dígitos > 6)' : '❌ Desativado'}
-
-${(!user.derivToken || !user.goalPercentage) ? '\n⚠️ Configure todos os itens antes de iniciar uma sessão.' : '\n✅ Tudo pronto! Use /session para iniciar.'}
         `;
         
-        this.bot.sendMessage(chatId, configMessage, { parse_mode: 'Markdown' });
-        setTimeout(() => this.showConfigMenu(chatId), 500);
+        const isReady = user.derivToken && user.goalPercentage;
+        
+        const keyboard = {
+          reply_markup: {
+            inline_keyboard: isReady 
+              ? [
+                  [{ text: '🚀 Iniciar Sessão', callback_data: 'start_session' }],
+                  [{ text: '🔙 Voltar para Configuração', callback_data: 'back_to_menu' }]
+                ]
+              : [
+                  [{ text: '🔙 Voltar para Configuração', callback_data: 'back_to_menu' }]
+                ]
+          }
+        };
+        
+        const finalMessage = isReady 
+          ? configMessage + '\n✅ *Tudo pronto!* Clique em "Iniciar Sessão" ou use /session'
+          : configMessage + '\n⚠️ *Configure todos os itens obrigatórios antes de iniciar uma sessão.*';
+        
+        this.bot.sendMessage(chatId, finalMessage, { 
+          parse_mode: 'Markdown',
+          ...keyboard
+        });
+      }
+
+      if (data === 'start_session') {
+        const user = this.userStore.getUser(chatId);
+        
+        if (!user || !user.derivToken || !user.goalPercentage) {
+          this.bot.sendMessage(chatId, '❌ Configuração incompleta. Use /config');
+          this.bot.answerCallbackQuery(query.id);
+          return;
+        }
+        
+        if (this.sessionManager.hasActiveSession(chatId)) {
+          this.bot.sendMessage(chatId, '⚠️ Você já tem uma sessão ativa.\nUse /stop para encerrar.');
+          this.bot.answerCallbackQuery(query.id);
+          return;
+        }
+        
+        await this.sessionManager.startSession(chatId);
       }
       
       this.bot.answerCallbackQuery(query.id);

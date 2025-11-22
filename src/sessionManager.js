@@ -20,6 +20,7 @@ export class SessionManager {
     }
 
     const maxLosses = user.maxLosses ?? 6;
+    const maxGlobalLoss = user.maxGlobalLoss ?? null;
     const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
     const useUnderOverStrategy = user.useUnderOverStrategy ?? false;
     const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false; // default true
@@ -32,7 +33,9 @@ export class SessionManager {
       this.bot,
       useDigitDifferStrategy,
       useUnderOverStrategy,
-      useMartingaleEvenOdd
+      useMartingaleEvenOdd,
+      maxGlobalLoss,
+      this // passa o sessionManager para poder chamar stopSession
     );
 
     this.sessions.set(chatId, client);
@@ -40,11 +43,13 @@ export class SessionManager {
     const riskMap = { 1: 0.5, 2: 1.5, 3: 3.5, 4: 7.5, 5: 15.5, 6: 31.0 };
     const risk = riskMap[maxLosses] ?? 31.0;
 
+    const globalLossText = maxGlobalLoss ? `\n🚨 Max Loss Global: ${maxGlobalLoss}%` : '';
+
     this.bot.sendMessage(chatId, `
 🚀 *Sessão Iniciada!*
 
 🎯 Meta: ${user.goalPercentage}%
-❌ Máx. Loss (Even/Odd): ${maxLosses} (Risco ~ ${risk}%)
+❌ Máx. Loss (Even/Odd): ${maxLosses} (Risco ~ ${risk}%)${globalLossText}
 🔄 Martingale Even/Odd: ${useMartingaleEvenOdd ? '✅ Ativado' : '❌ Desativado'}
 🧠 Estratégia Digit Differs: ${useDigitDifferStrategy ? '✅ Ativada' : '❌ Desativada'}
 📉 Estratégia Under/Over: ${useUnderOverStrategy ? '✅ Ativada' : '❌ Desativada'}

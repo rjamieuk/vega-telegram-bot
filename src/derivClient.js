@@ -1,15 +1,17 @@
 import WebSocket from 'ws';
 
 export class DerivClient {
-  constructor(token, goalPercentage, maxLosses, chatId, bot, useDigitDifferStrategy = false, useUnderOverStrategy = false, useMartingaleEvenOdd = true) {
+  constructor(token, goalPercentage, maxLosses, chatId, bot, useDigitDifferStrategy = false, useUnderOverStrategy = false, useMartingaleEvenOdd = true, maxGlobalLoss = null, sessionManager = null) {
     this.token = token;
     this.goalPercentage = goalPercentage;
     this.maxLosses = maxLosses ?? 6;
+    this.maxGlobalLoss = maxGlobalLoss;
     this.chatId = chatId;
     this.bot = bot;
     this.useDigitDifferStrategy = useDigitDifferStrategy;
     this.useUnderOverStrategy = useUnderOverStrategy;
     this.useMartingaleEvenOdd = useMartingaleEvenOdd;
+    this.sessionManager = sessionManager;
   
     this.ws = null;
     this.isConnected = false;
@@ -122,6 +124,7 @@ export class DerivClient {
     if (data.msg_type === 'balance') {
       this.balance.current = parseFloat(data.balance.balance);
       this.checkGoalReached();
+      this.checkGlobalLossReached();
     }
 
     if (data.msg_type === 'tick') {
@@ -436,10 +439,22 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           this.addSessionToHistory(false, sessionProfitLoss);
         
           const summary = this.generateSummaryOnMaxLoss(sessionProfitLoss);
-          this.bot.sendMessage(this.chatId, summary, { parse_mode: 'Markdown' });
+          this.bot.sendMessage(this.chatId, summary, { 
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
+              ]
+            }
+          });
         
           this.resetTradingStateEvenOdd();
           this.disconnect();
+          
+          // Auto-stop
+          if (this.sessionManager) {
+            this.sessionManager.stopSession(this.chatId);
+          }
         
         } else {
           // Martingale continua
@@ -724,8 +739,44 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
   
     if (growth >= this.goalPercentage) {
       const summary = this.generateSummary();
-      this.bot.sendMessage(this.chatId, summary, { parse_mode: 'Markdown' });
+      this.bot.sendMessage(this.chatId, summary, { 
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
+          ]
+        }
+      });
       this.disconnect();
+      
+      // Auto-stop
+      if (this.sessionManager) {
+        this.sessionManager.stopSession(this.chatId);
+      }
+    }
+  }
+
+  checkGlobalLossReached() {
+    if (!this.maxGlobalLoss) return;
+    
+    const growth = this.getGrowthPercentage();
+    
+    if (growth <= -Math.abs(this.maxGlobalLoss)) {
+      const summary = this.generateSummaryOnGlobalLoss();
+      this.bot.sendMessage(this.chatId, summary, { 
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
+          ]
+        }
+      });
+      this.disconnect();
+      
+      // Auto-stop
+      if (this.sessionManager) {
+        this.sessionManager.stopSession(this.chatId);
+      }
     }
   }
 
@@ -784,7 +835,34 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
 
-Use /session para iniciar uma nova sessão quando desejar.
+✨ Sessão encerrada automaticamente!
+    `;
+  }
+
+  generateSummaryOnGlobalLoss() {
+    const profit = this.balance.current - this.balance.initial;
+    const growth = this.getGrowthPercentage();
+    const executionTime = this.getExecutionTime();
+    const winSessions = this.sessionHistory.filter(s => s.result === 'WIN').length;
+    const totalSessions = this.sessionHistory.length;
+    const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+
+    return `
+🚨 *Sessão Encerrada por Max Loss Global*
+
+⏱ *Tempo de Execução:* ${executionTime}
+💰 *Saldo Inicial:* ${this.balance.currency} ${this.balance.initial.toFixed(2)}
+💵 *Saldo Final:* ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📉 *Prejuízo Total:* ${this.balance.currency} ${profit.toFixed(2)}
+📊 *Crescimento:* ${growth.toFixed(2)}%
+🚨 *Limite Global:* -${Math.abs(this.maxGlobalLoss)}%
+
+📋 *Total de Sessões (Even/Odd):* ${totalSessions}
+✅ *Vitórias:* ${winSessions}
+❌ *Derrotas:* ${totalSessions - winSessions}
+📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
+
+✨ Sessão encerrada automaticamente!
     `;
   }
 
@@ -811,6 +889,7 @@ Use /session para iniciar uma nova sessão quando desejar.
       profit: profit,
       growth: growth,
       goalPercentage: this.goalPercentage,
+      maxGlobalLoss: this.maxGlobalLoss,
       totalSessions: totalSessions,
       winSessions: winSessions,
       lossSessions: totalSessions - winSessions,
