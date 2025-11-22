@@ -89,6 +89,7 @@ export class DerivClient {
 
   handleMessage(data) {
     if (data.error) {
+      console.error(`[${this.chatId}] Erro API:`, data.error);
       this.bot.sendMessage(this.chatId, `❌ Erro: ${data.error.message}`);
       return;
     }
@@ -127,6 +128,8 @@ export class DerivClient {
       const contractId = data.buy.contract_id;
       const contractType = data.buy.contract_type;
       
+      console.log(`[${this.chatId}] Contrato comprado: ${contractId} (${contractType})`);
+      
       // Armazena o contractId no estado correto
       if (contractType === 'DIGITEVEN' || contractType === 'DIGITODD') {
         this.tradingState.contractId = contractId;
@@ -150,13 +153,19 @@ export class DerivClient {
         const contractId = poc.contract_id;
         const contractType = poc.contract_type;
 
+        console.log(`[${this.chatId}] Contrato finalizado: ${contractId} (${contractType}) - Profit: ${profit}`);
+
         // Identifica qual estratégia pelo contract_type
         if (contractType === 'DIGITEVEN' || contractType === 'DIGITODD') {
+          // Verifica se é o contrato que estamos esperando
           if (this.tradingState.contractId === contractId) {
+            console.log(`[${this.chatId}] Processando resultado Even/Odd`);
             this.handleEvenOddTradeResult(profit > 0, profit);
           }
         } else if (contractType === 'DIGITDIFF') {
+          // Verifica se é o contrato que estamos esperando
           if (this.digitDifferState.contractId === contractId) {
+            console.log(`[${this.chatId}] Processando resultado Digit Differs`);
             this.handleDigitDifferResult(profit > 0, profit);
           }
         }
@@ -276,11 +285,13 @@ export class DerivClient {
   buyContract(proposalId, stakeAmount) {
     this.ws.send(JSON.stringify({
       buy: proposalId,
-      price: stakeAmount // CORREÇÃO: Enviar o valor do stake aqui
+      price: stakeAmount
     }));
   }
 
   handleEvenOddTradeResult(isWin, profit) {
+    console.log(`[${this.chatId}] handleEvenOddTradeResult - isWin: ${isWin}, profit: ${profit}`);
+    
     this.tradingState.sessionTrades.push({
       attemptNumber: this.tradingState.attemptNumber + 1,
       stake: this.tradingState.currentStake,
@@ -333,11 +344,12 @@ export class DerivClient {
       
       setTimeout(() => {
         this.executeEvenOddTrade(this.tradingState.currentSymbol, this.tradingState.currentType, {});
-      }, 500);
+      }, 1000);
     }
   }
 
   resetTradingStateEvenOdd() {
+    console.log(`[${this.chatId}] Resetando estado Even/Odd`);
     this.tradingState = {
       isActive: false,
       currentSymbol: null,
@@ -419,6 +431,8 @@ export class DerivClient {
   }
 
   handleDigitDifferResult(isWin, profit) {
+    console.log(`[${this.chatId}] handleDigitDifferResult - isWin: ${isWin}, profit: ${profit}`);
+    
     const message = isWin
       ? `
 ✅ *Trade Vencedor (Digit Differs)!*
@@ -444,6 +458,7 @@ export class DerivClient {
   }
 
   resetDigitDifferState() {
+    console.log(`[${this.chatId}] Resetando estado Digit Differs`);
     this.digitDifferState = {
       isActive: false,
       currentSymbol: null,
