@@ -271,7 +271,7 @@ export class DerivClient {
   buyContract(proposalId) {
     this.ws.send(JSON.stringify({
       buy: proposalId,
-      price: 0
+      price: 0 // CORREÇÃO: Definir price como 0 para comprar pelo preço de mercado
     }));
   }
 
