@@ -70,4 +70,20 @@ export class UserStore {
     this.users[chatId].useDigitDifferStrategy = !!value;
     this.save();
   }
+
+  setUseUnderOverStrategy(chatId, value) {
+    if (!this.users[chatId]) {
+      this.users[chatId] = {};
+    }
+    this.users[chatId].useUnderOverStrategy = !!value;
+    this.save();
+  }
+
+  setUseMartingaleEvenOdd(chatId, value) {
+    if (!this.users[chatId]) {
+      this.users[chatId] = {};
+    }
+    this.users[chatId].useMartingaleEvenOdd = !!value;
+    this.save();
+  }
 }

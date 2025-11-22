@@ -21,6 +21,8 @@ export class SessionManager {
 
     const maxLosses = user.maxLosses ?? 6;
     const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
+    const useUnderOverStrategy = user.useUnderOverStrategy ?? false;
+    const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false; // default true
 
     const client = new DerivClient(
       user.derivToken,
@@ -28,7 +30,9 @@ export class SessionManager {
       maxLosses,
       chatId,
       this.bot,
-      useDigitDifferStrategy
+      useDigitDifferStrategy,
+      useUnderOverStrategy,
+      useMartingaleEvenOdd
     );
 
     this.sessions.set(chatId, client);
@@ -41,7 +45,9 @@ export class SessionManager {
 
 🎯 Meta: ${user.goalPercentage}%
 ❌ Máx. Loss (Even/Odd): ${maxLosses} (Risco ~ ${risk}%)
+🔄 Martingale Even/Odd: ${useMartingaleEvenOdd ? '✅ Ativado' : '❌ Desativado'}
 🧠 Estratégia Digit Differs: ${useDigitDifferStrategy ? '✅ Ativada' : '❌ Desativada'}
+📉 Estratégia Under/Over: ${useUnderOverStrategy ? '✅ Ativada' : '❌ Desativada'}
 👀 Observando oportunidades...
 
 Use /status para acompanhar

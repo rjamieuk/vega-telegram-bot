@@ -29,8 +29,9 @@ export class VegaBot {
 🎯 *Bem-vindo ao Vega Monitor Trading System*
 
 Sou um robô automatizado que opera na Deriv usando:
-- Estratégia de padrões Even/Odd em índices de volatilidade
+- Estratégia de padrões Even/Odd em índices de volatilidade (com martingale opcional)
 - (Opcional) Estratégia Digit Differs por repetição de dígitos
+- (Opcional) Estratégia Under/Over quando todos os 10 dígitos > 6
 
 *Como funcionar:*
 1️⃣ Configure seu token da Deriv: /config
@@ -39,7 +40,7 @@ Sou um robô automatizado que opera na Deriv usando:
 4️⃣ Pare a sessão: /stop
 
 *Comandos disponíveis:*
-/config - Configurar token, meta, risco e Digit Differs
+/config - Configurar token, meta, risco e estratégias
 /session - Iniciar nova sessão
 /status - Ver status atual
 /stop - Parar sessão ativa
@@ -59,7 +60,7 @@ Sou um robô automatizado que opera na Deriv usando:
 
 *Comandos:*
 /start - Mensagem de boas-vindas
-/config - Configurar token Deriv, meta %, máx. loss e Digit Differs
+/config - Configurar token Deriv, meta %, máx. loss e estratégias
 /session - Iniciar sessão de trading
 /status - Ver status da sessão atual
 /stop - Parar sessão ativa
@@ -70,15 +71,18 @@ Sou um robô automatizado que opera na Deriv usando:
 2. Envie seu API token da Deriv
 3. Defina sua meta de crescimento (%)
 4. Defina o máximo de loss (1-6) para estratégia Even/Odd
-5. Escolha se deseja ativar a estratégia Digit Differs
+5. Escolha se deseja ativar martingale na estratégia Even/Odd
+6. Escolha se deseja ativar a estratégia Digit Differs
+7. Escolha se deseja ativar a estratégia Under/Over
 
 *Como operar:*
 1. Use /session para iniciar
 2. O bot detecta padrões automaticamente
-   - Even/Odd com martingale e limite de losses
+   - Even/Odd com martingale opcional e limite de losses
    - (Opcional) Digit Differs com 5% de stake sem gale (4 dígitos consecutivos)
+   - (Opcional) Under/Over com 1% de stake sem gale (10 dígitos > 6)
 3. O lucro de qualquer estratégia conta para a mesma meta
-4. Para ao atingir meta ou limite de perdas da estratégia Even/Odd
+4. Para ao atingir meta ou limite de perdas da estratégia Even/Odd (se martingale ativo)
 
 *Suporte:*
 Em caso de dúvidas, entre em contato com o desenvolvedor.
@@ -90,23 +94,7 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
     // Comando /config
     this.bot.onText(/\/config/, (msg) => {
       const chatId = msg.chat.id;
-      
-      const keyboard = {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
-            [{ text: '🎯 Configurar Meta %', callback_data: 'config_goal' }],
-            [{ text: '❌ Máx. Loss (1–6)', callback_data: 'config_max_loss' }],
-            [{ text: '🔢 Estratégia Digit Differs', callback_data: 'config_digit_diff' }],
-            [{ text: '📊 Ver Configuração', callback_data: 'view_config' }]
-          ]
-        }
-      };
-      
-      this.bot.sendMessage(chatId, '⚙️ *Configurações*\n\nEscolha uma opção:', {
-        parse_mode: 'Markdown',
-        ...keyboard
-      });
+      this.showConfigMenu(chatId);
     });
 
     // Comando /session
@@ -157,7 +145,9 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
 ❌ *Derrotas:* ${status.lossSessions}
 📊 *Taxa de Vitória:* ${status.winRate.toFixed(2)}%
 
+🔄 *Martingale Even/Odd:* ${status.useMartingaleEvenOdd ? '✅ Ativado' : '❌ Desativado'}
 🧠 *Digit Differs:* ${status.useDigitDifferStrategy ? '✅ Ativado' : '❌ Desativado'}
+📉 *Under/Over:* ${status.useUnderOverStrategy ? '✅ Ativado' : '❌ Desativado'}
 ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportunidades...*'}
       `;
       
@@ -178,6 +168,27 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
     });
   }
 
+  showConfigMenu(chatId) {
+    const keyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
+          [{ text: '🎯 Configurar Meta %', callback_data: 'config_goal' }],
+          [{ text: '❌ Máx. Loss (1–6)', callback_data: 'config_max_loss' }],
+          [{ text: '🔄 Martingale Even/Odd', callback_data: 'config_martingale' }],
+          [{ text: '🔢 Estratégia Digit Differs', callback_data: 'config_digit_diff' }],
+          [{ text: '📉 Estratégia Under/Over', callback_data: 'config_under_over' }],
+          [{ text: '📊 Ver Configuração', callback_data: 'view_config' }]
+        ]
+      }
+    };
+    
+    this.bot.sendMessage(chatId, '⚙️ *Configurações*\n\nEscolha uma opção:', {
+      parse_mode: 'Markdown',
+      ...keyboard
+    });
+  }
+
   setupCallbacks() {
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
@@ -194,6 +205,9 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
             this.userStore.setDerivToken(chatId, token);
             this.bot.sendMessage(chatId, '✅ Token configurado com sucesso!');
             this.bot.removeListener('message', listener);
+            
+            // Reaparece o menu
+            setTimeout(() => this.showConfigMenu(chatId), 500);
           }
         };
         this.bot.on('message', listener);
@@ -210,11 +224,15 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
             if (isNaN(goal) || goal <= 0) {
               this.bot.sendMessage(chatId, '❌ Meta inválida. Use um número positivo (ex: 10)');
               this.bot.removeListener('message', listener);
+              setTimeout(() => this.showConfigMenu(chatId), 500);
               return;
             }
             this.userStore.setGoalPercentage(chatId, goal);
             this.bot.sendMessage(chatId, `✅ Meta configurada para ${goal}%`);
             this.bot.removeListener('message', listener);
+            
+            // Reaparece o menu
+            setTimeout(() => this.showConfigMenu(chatId), 500);
           }
         };
         this.bot.on('message', listener);
@@ -240,6 +258,7 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
             if (isNaN(val) || val < 1 || val > 6) {
               this.bot.sendMessage(chatId, '❌ Valor inválido. Envie um número entre 1 e 6.');
               this.bot.removeListener('message', listener);
+              setTimeout(() => this.showConfigMenu(chatId), 500);
               return;
             }
             this.userStore.setMaxLosses(chatId, val);
@@ -250,9 +269,49 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
               { parse_mode: 'Markdown' }
             );
             this.bot.removeListener('message', listener);
+            
+            // Reaparece o menu
+            setTimeout(() => this.showConfigMenu(chatId), 500);
           }
         };
         this.bot.on('message', listener);
+      }
+
+      if (data === 'config_martingale') {
+        const user = this.userStore.getUser(chatId) || {};
+        const currentlyOn = user.useMartingaleEvenOdd !== false; // default true
+
+        const keyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Ativar Martingale', callback_data: 'martingale_on' }],
+              [{ text: '❌ Desativar Martingale', callback_data: 'martingale_off' }],
+              [{ text: '🔙 Voltar ao Menu', callback_data: 'back_to_menu' }]
+            ]
+          }
+        };
+
+        this.bot.sendMessage(
+          chatId,
+          `🔄 *Martingale Even/Odd*\n\n` +
+          `Estado atual: *${currentlyOn ? 'Ativado' : 'Desativado'}*\n\n` +
+          `- Quando *ativado*: dobra o stake a cada loss até atingir o máximo de loss configurado.\n` +
+          `- Quando *desativado*: usa sempre 0.5% do saldo, sem parar no loss (parada manual).\n\n` +
+          `Escolha uma opção:`,
+          { parse_mode: 'Markdown', ...keyboard }
+        );
+      }
+
+      if (data === 'martingale_on') {
+        this.userStore.setUseMartingaleEvenOdd(chatId, true);
+        this.bot.sendMessage(chatId, '✅ Martingale Even/Odd *ativado*.', { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
+      }
+
+      if (data === 'martingale_off') {
+        this.userStore.setUseMartingaleEvenOdd(chatId, false);
+        this.bot.sendMessage(chatId, '❌ Martingale Even/Odd *desativado*.\n\nℹ️ O bot continuará operando sem parar no loss. Use /stop para encerrar manualmente.', { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
       }
 
       if (data === 'config_digit_diff') {
@@ -263,7 +322,8 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
           reply_markup: {
             inline_keyboard: [
               [{ text: '✅ Ativar Digit Differs', callback_data: 'digit_diff_on' }],
-              [{ text: '❌ Desativar Digit Differs', callback_data: 'digit_diff_off' }]
+              [{ text: '❌ Desativar Digit Differs', callback_data: 'digit_diff_off' }],
+              [{ text: '🔙 Voltar ao Menu', callback_data: 'back_to_menu' }]
             ]
           }
         };
@@ -283,11 +343,56 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
       if (data === 'digit_diff_on') {
         this.userStore.setUseDigitDifferStrategy(chatId, true);
         this.bot.sendMessage(chatId, '✅ Estratégia Digit Differs *ativada*.', { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
       }
 
       if (data === 'digit_diff_off') {
         this.userStore.setUseDigitDifferStrategy(chatId, false);
         this.bot.sendMessage(chatId, '❌ Estratégia Digit Differs *desativada*.', { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
+      }
+
+      if (data === 'config_under_over') {
+        const user = this.userStore.getUser(chatId) || {};
+        const currentlyOn = !!user.useUnderOverStrategy;
+
+        const keyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Ativar Under/Over', callback_data: 'under_over_on' }],
+              [{ text: '❌ Desativar Under/Over', callback_data: 'under_over_off' }],
+              [{ text: '🔙 Voltar ao Menu', callback_data: 'back_to_menu' }]
+            ]
+          }
+        };
+
+        this.bot.sendMessage(
+          chatId,
+          `📉 *Estratégia Under/Over*\n\n` +
+          `Estado atual: *${currentlyOn ? 'Ativado' : 'Desativado'}*\n\n` +
+          `- Usa 1% do capital por entrada, sem gale.\n` +
+          `- Opera quando todos os 10 dígitos analisados são > 6 (7, 8, 9).\n` +
+          `- Entra com DIGITUNDER 7.\n` +
+          `- O lucro conta para a mesma meta global.\n\n` +
+          `Escolha uma opção:`,
+          { parse_mode: 'Markdown', ...keyboard }
+        );
+      }
+
+      if (data === 'under_over_on') {
+        this.userStore.setUseUnderOverStrategy(chatId, true);
+        this.bot.sendMessage(chatId, '✅ Estratégia Under/Over *ativada*.', { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
+      }
+
+      if (data === 'under_over_off') {
+        this.userStore.setUseUnderOverStrategy(chatId, false);
+        this.bot.sendMessage(chatId, '❌ Estratégia Under/Over *desativada*.', { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
+      }
+
+      if (data === 'back_to_menu') {
+        this.showConfigMenu(chatId);
       }
       
       if (data === 'view_config') {
@@ -301,6 +406,8 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
         const maxLosses = user.maxLosses ?? 6;
         const risk = riskByMaxLoss[maxLosses] ?? 31.0;
         const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
+        const useUnderOverStrategy = user.useUnderOverStrategy ?? false;
+        const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false; // default true
 
         const configMessage = `
 ⚙️ *Suas Configurações*
@@ -308,12 +415,15 @@ ${status.isTrading ? '🔄 *Trade em andamento...*' : '👀 *Observando oportuni
 🔑 *Token:* ${user.derivToken ? '✅ Configurado' : '❌ Não configurado'}
 🎯 *Meta:* ${user.goalPercentage ? `${user.goalPercentage}%` : '❌ Não configurada'}
 ❌ *Máx. Loss (Even/Odd):* ${maxLosses} (Risco ~ ${risk}%)
+🔄 *Martingale Even/Odd:* ${useMartingaleEvenOdd ? '✅ Ativado' : '❌ Desativado'}
 🔢 *Digit Differs:* ${useDigitDifferStrategy ? '✅ Ativado (4 dígitos)' : '❌ Desativado'}
+📉 *Under/Over:* ${useUnderOverStrategy ? '✅ Ativado (10 dígitos > 6)' : '❌ Desativado'}
 
 ${(!user.derivToken || !user.goalPercentage) ? '\n⚠️ Configure todos os itens antes de iniciar uma sessão.' : '\n✅ Tudo pronto! Use /session para iniciar.'}
         `;
         
         this.bot.sendMessage(chatId, configMessage, { parse_mode: 'Markdown' });
+        setTimeout(() => this.showConfigMenu(chatId), 500);
       }
       
       this.bot.answerCallbackQuery(query.id);
