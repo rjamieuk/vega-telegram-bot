@@ -114,57 +114,46 @@ export class DerivClient {
       this.handleTick(data.tick);
     }
 
-    if (data.msg_type === 'proposal') {
-      // Checa a qual estratégia pertence essa proposta pelo echo_req
-      if (data.echo_req && data.echo_req.contract_type) {
-        const contractType = data.echo_req.contract_type;
-        
-        if ((contractType === 'DIGITEVEN' || contractType === 'DIGITODD') && this.tradingState.isActive) {
-          // Estratégia Even/Odd
-          if (data.proposal && data.proposal.id) {
-            this.buyEvenOddContract(data.proposal.id);
-          }
-        } else if (contractType === 'DIGITDIFF' && this.digitDifferState.isActive) {
-          // Estratégia Digit Differs
-          if (data.proposal && data.proposal.id) {
-            this.buyDigitDifferContract(data.proposal.id);
-          }
-        }
-      }
+    if (data.msg_type === 'proposal' && data.proposal) {
+      this.buyContract(data.proposal.id);
     }
 
     if (data.msg_type === 'buy' && data.buy) {
       const contractId = data.buy.contract_id;
+      const contractType = data.buy.contract_type;
       
-      // Identifica qual estratégia comprou pelo contract_type
-      if (data.buy.contract_type === 'DIGITEVEN' || data.buy.contract_type === 'DIGITODD') {
+      // Armazena o contractId no estado correto
+      if (contractType === 'DIGITEVEN' || contractType === 'DIGITODD') {
         this.tradingState.contractId = contractId;
-        this.ws.send(JSON.stringify({
-          proposal_open_contract: 1,
-          contract_id: contractId,
-          subscribe: 1
-        }));
-      } else if (data.buy.contract_type === 'DIGITDIFF') {
+      } else if (contractType === 'DIGITDIFF') {
         this.digitDifferState.contractId = contractId;
-        this.ws.send(JSON.stringify({
-          proposal_open_contract: 1,
-          contract_id: contractId,
-          subscribe: 1
-        }));
       }
+      
+      // Subscreve para receber atualizações do contrato
+      this.ws.send(JSON.stringify({
+        proposal_open_contract: 1,
+        contract_id: contractId,
+        subscribe: 1
+      }));
     }
 
     if (data.msg_type === 'proposal_open_contract') {
-      if (data.proposal_open_contract && data.proposal_open_contract.is_sold) {
-        const poc = data.proposal_open_contract;
+      const poc = data.proposal_open_contract;
+      
+      if (poc && poc.is_sold) {
         const profit = parseFloat(poc.profit);
         const contractId = poc.contract_id;
+        const contractType = poc.contract_type;
 
-        // Identifica qual contrato encerrou
-        if (this.tradingState.contractId && contractId === this.tradingState.contractId) {
-          this.handleEvenOddTradeResult(profit > 0, profit);
-        } else if (this.digitDifferState.contractId && contractId === this.digitDifferState.contractId) {
-          this.handleDigitDifferResult(profit > 0, profit);
+        // Identifica qual estratégia pelo contract_type
+        if (contractType === 'DIGITEVEN' || contractType === 'DIGITODD') {
+          if (this.tradingState.contractId === contractId) {
+            this.handleEvenOddTradeResult(profit > 0, profit);
+          }
+        } else if (contractType === 'DIGITDIFF') {
+          if (this.digitDifferState.contractId === contractId) {
+            this.handleDigitDifferResult(profit > 0, profit);
+          }
         }
       }
     }
@@ -185,8 +174,7 @@ export class DerivClient {
       this.digitHistory[symbol].shift();
     }
 
-    // CORRIGIDO: Só bloqueia novas oportunidades se já tem trade ativo
-    // Mas não impede o martingale de continuar
+    // Só bloqueia novas oportunidades se já tem trade ativo
     const anyTradeActive = this.tradingState.isActive || this.digitDifferState.isActive;
     if (anyTradeActive) {
       return;
@@ -237,7 +225,7 @@ export class DerivClient {
   executeEvenOddTrade(symbol, tradeType, patternInfo) {
     if (!this.isConnected) return;
     
-    // CORRIGIDO: Recalcula baseStake sempre com base no saldo atual
+    // Recalcula baseStake no início de cada sessão
     if (this.tradingState.attemptNumber === 0) {
       let base = this.balance.current * 0.005;
       if (base < 0.5) base = 0.5;
@@ -280,10 +268,10 @@ export class DerivClient {
     return Math.round(stake * 100) / 100;
   }
 
-  buyEvenOddContract(proposalId) {
+  buyContract(proposalId) {
     this.ws.send(JSON.stringify({
       buy: proposalId,
-      price: this.tradingState.currentStake
+      price: 0
     }));
   }
 
@@ -324,7 +312,7 @@ export class DerivClient {
       this.disconnect();
       
     } else {
-      // CORRIGIDO: Martingale continua - não reseta isActive
+      // Martingale continua
       const message = `
 ❌ *Trade Perdido (Even/Odd)*
 
@@ -335,7 +323,7 @@ export class DerivClient {
       
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
       
-      // CORRIGIDO: Reseta apenas o contractId para permitir nova compra
+      // Reseta apenas o contractId para permitir nova compra
       this.tradingState.contractId = null;
       
       setTimeout(() => {
@@ -358,16 +346,14 @@ export class DerivClient {
     };
   }
 
-  // --------- ESTRATÉGIA DIGIT DIFFERS (CORRIGIDA - 4 DÍGITOS) ---------
+  // --------- ESTRATÉGIA DIGIT DIFFERS (4 DÍGITOS) ---------
   analyzePatternDigitDiffer(symbol) {
     const history = this.digitHistory[symbol];
     
-    // CORRIGIDO: Precisa ter 10 dígitos para analisar os últimos 4
     if (history.length < 10) {
       return { isOpportunity: false };
     }
 
-    // CORRIGIDO: Pega os últimos 10 dígitos, depois analisa os 4 últimos desses 10
     const last10 = history.slice(-10);
     const last4OfLast10 = last10.slice(-4);
     
@@ -425,13 +411,6 @@ export class DerivClient {
     };
 
     this.ws.send(JSON.stringify(proposal));
-  }
-
-  buyDigitDifferContract(proposalId) {
-    this.ws.send(JSON.stringify({
-      buy: proposalId,
-      price: this.digitDifferState.stake
-    }));
   }
 
   handleDigitDifferResult(isWin, profit) {
