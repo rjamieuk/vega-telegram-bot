@@ -84,11 +84,17 @@ Use /stop para encerrar
       const goal = user.ppcpGoalPercentage;
       const maxGlobalLoss = user.ppcpMaxGlobalLoss ?? null;
       const initialStake = user.ppcpInitialStake;
+      const direction = user.ppcpDirection;
 
-      if (!goal || !initialStake) {
+      // ✅ VALIDAÇÃO COMPLETA
+      if (!goal || !initialStake || !direction) {
         this.bot.sendMessage(chatId,
-          '❌ Configuração PPCP incompleta.\n' +
-          'Use /config e ajuste os parâmetros necessários.'
+          '❌ Configuração PPCP incompleta.\n\n' +
+          'Certifique-se de configurar:\n' +
+          '• Meta de Lucro\n' +
+          '• Stake Inicial\n' +
+          '• Direção (A Favor ou Contra)\n\n' +
+          'Use /config para ajustar.'
         );
         return;
       }
@@ -106,7 +112,8 @@ Use /stop para encerrar
         this,
         {
           mode: 'ppcp',
-          ppcpInitialStake: initialStake
+          ppcpInitialStake: initialStake,
+          ppcpDirection: direction  // ✅ PASSANDO A DIREÇÃO
         }
       );
 
@@ -116,11 +123,14 @@ Use /stop para encerrar
         ? `\n🚨 Max Loss Global: -${Math.abs(maxGlobalLoss)}%`
         : '';
 
+      const directionLabel = direction === 'favor' ? 'A Favor' : 'Contra';
+
       this.bot.sendMessage(chatId, `
 🚀 *Sessão Iniciada (PPCP)!*
 
 🎯 Meta: ${goal}%
-💵 Stake Inicial: ${initialStake.toFixed(2)} USD${globalLossText}
+💵 Stake Inicial: ${initialStake.toFixed(2)} USD
+🎲 Direção: ${directionLabel}${globalLossText}
 
 📌 Sistema de recuperação inteligente ativo.
 
@@ -236,6 +246,7 @@ Use /stop para encerrar
     }
     this.sessions.clear();
   }
+
   // Chamado pelo DerivClient sempre que volta a ficar ocioso (sem trade ativo)
   notifyIdle(chatId) {
     // Se não existir sessão ativa, não faz nada
