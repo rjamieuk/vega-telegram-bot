@@ -201,10 +201,10 @@ Use /stop para encerrar
 💵 Stake Inicial: ${initialStake.toFixed(2)} USD${globalLossText}
 
 📌 Estratégia DigitHunter:
-• Detecta 4x o mesmo dígito em sequência
-• Entra com DIGITMATCH no mesmo dígito
-• Em caso de loss, repete MATCH com fator 1.12x até acertar
-• Ao acertar, encerra sessão DigitHunter e volta stake ao inicial
+• Detecta melhores momentos de acumulo
+• Entra com DIGITMATCH seguindo o estudo
+• Em caso de loss, recupera com fator 1.12x até acertar
+• Ao acertar, encerra sessão e volta stake ao inicial.
 
 Use /status para acompanhar
 Use /stop para encerrar

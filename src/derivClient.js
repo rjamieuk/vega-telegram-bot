@@ -1101,7 +1101,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     }
   }
 
-  // ============ DIGITHUNTER (4x mesmo dígito -> DIGITMATCH com recover 1.12x) ============
+  // ============ DIGITHUNTER (4x mesmo dígito -> DIGITMATCH com recover 1.13x) ============
 
   analyzePatternDigitHunter(symbol) {
     const history = this.digitHistory[symbol];
@@ -1156,7 +1156,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 🎯 Dígito Alvo: *${predictionDigit}*
 💰 Entrada: *DIGITMATCH ${predictionDigit}*
 💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
-📌 Recuperação ativa (fator 1.12x)
+📌 Recuperação ativa (fator 1.13x)
       `
       : `
 🎯 *Oportunidade Detectada (DigitHunter)!*
@@ -1166,7 +1166,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 🎯 Dígito Alvo: *${predictionDigit}* (4x seguidas)
 💰 Entrada: *DIGITMATCH ${predictionDigit}*
 💵 Stake Inicial: ${this.balance.currency} ${stake.toFixed(2)}
-📌 Estratégia DigitHunter (recuperação 1.12x)
+📌 Estratégia DigitHunter (recuperação 1.13x)
       `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
@@ -1239,8 +1239,8 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       this.resetDigitHunterTradeState();
 
     } else {
-      // LOSS -> insiste em matches com fator 1.12x
-      const nextStakeRaw = this.digitHunterState.currentStake * 1.12;
+      // LOSS -> insiste em matches com fator 1.13x
+      const nextStakeRaw = this.digitHunterState.currentStake * 1.13;
       const nextStake = Math.round(nextStakeRaw * 100) / 100;
       this.digitHunterState.currentStake = nextStake;
       this.digitHunterState.inSequence = true;
@@ -1255,7 +1255,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
 🎯 Meta: ${this.goalPercentage}%
 
-➡️ Próxima stake (fator 1.12x): ${this.balance.currency} ${nextStake.toFixed(2)}
+➡️ Próxima stake (fator 1.13x): ${this.balance.currency} ${nextStake.toFixed(2)}
 ℹ️ Continuando DigitMATCH no mesmo dígito até acertar.
       `;
 
