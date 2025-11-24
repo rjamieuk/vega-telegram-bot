@@ -516,15 +516,15 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           this.ppcpState.currentStake = nextStake;
 
           const message = `
-✅ *Trade Vencedor (PPCP Even/Odd), porém sessão ainda < 0.01*
+✅ *Trade Vencedor (PPCP)*
 
-💰 Lucro atual da Sessão PPCP: ${this.balance.currency} ${sessionProfit.toFixed(5)}
+💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(5)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta Global PPCP: ${this.goalPercentage}%
+🎯 Meta: ${this.goalPercentage}%
 
-➡️ Próxima stake PPCP (quando surgir NOVA oportunidade): ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ O bot aguardará uma NOVA oportunidade (10x Even/Odd) para continuar a recuperação.
+➡️ Próxima stake: ${this.balance.currency} ${nextStake.toFixed(2)}
+ℹ️ Aguardando nova oportunidade para continuar recuperação.
           `;
 
           this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
@@ -536,16 +536,16 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
         this.ppcpState.currentStake = nextStake;
 
         const message = `
-❌ *Trade Perdido (PPCP Even/Odd)*
+❌ *Trade Perdido (PPCP)*
 
-💸 Resultado desta entrada: ${this.balance.currency} ${profit.toFixed(2)}
-💰 Lucro acumulado da Sessão PPCP: ${this.balance.currency} ${sessionProfit.toFixed(5)}
+💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
+💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(5)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta Global PPCP: ${this.goalPercentage}%
+🎯 Meta: ${this.goalPercentage}%
 
-➡️ Próxima stake PPCP (quando surgir NOVA oportunidade): ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ Como na regra PPCP, o bot NÃO entra em sequência, apenas na próxima oportunidade (10x Even/Odd).
+➡️ Próxima stake: ${this.balance.currency} ${nextStake.toFixed(2)}
+ℹ️ Sistema de recuperação ativo. Aguardando nova oportunidade.
         `;
 
         this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });

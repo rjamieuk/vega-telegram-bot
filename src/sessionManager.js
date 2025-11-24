@@ -5,6 +5,7 @@ export class SessionManager {
     this.bot = bot;
     this.userStore = userStore;
     this.sessions = new Map();
+    this.searchingMessages = new Map(); // Para controlar mensagens de "Buscando..."
   }
 
   hasActiveSession(chatId) {
@@ -32,7 +33,7 @@ export class SessionManager {
       const maxGlobalLoss = user.maxGlobalLoss ?? null;
       const useDigitDifferStrategy = user.useDigitDifferStrategy ?? false;
       const useUnderOverStrategy = user.useUnderOverStrategy ?? false;
-      const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false; // default true
+      const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false;
 
       const client = new DerivClient(
         user.derivToken,
@@ -45,7 +46,7 @@ export class SessionManager {
         useMartingaleEvenOdd,
         maxGlobalLoss,
         this,
-        { mode: 'standard' } // options
+        { mode: 'standard' }
       );
 
       this.sessions.set(chatId, client);
@@ -56,14 +57,13 @@ export class SessionManager {
       const globalLossText = maxGlobalLoss ? `\n🚨 Max Loss Global: ${maxGlobalLoss}%` : '';
 
       this.bot.sendMessage(chatId, `
-🚀 *Sessão Iniciada (Estratégia Padrão)!*
+🚀 *Sessão Iniciada (Default)!*
 
 🎯 Meta: ${user.goalPercentage}%
-❌ Máx. Loss (Even/Odd): ${maxLosses} (Risco ~ ${risk}%)${globalLossText}
-🔄 Martingale Even/Odd: ${useMartingaleEvenOdd ? '✅ Ativado' : '❌ Desativado'}
-🧠 Estratégia Digit Differs: ${useDigitDifferStrategy ? '✅ Ativada' : '❌ Desativada'}
-📉 Estratégia Under/Over: ${useUnderOverStrategy ? '✅ Ativada' : '❌ Desativada'}
-👀 Observando oportunidades...
+❌ Máx. Loss: ${maxLosses} (Risco ~ ${risk}%)${globalLossText}
+🔄 Martingale: ${useMartingaleEvenOdd ? '✅ Ativo' : '❌ Inativo'}
+🧠 Digit Differs: ${useDigitDifferStrategy ? '✅ Ativo' : '❌ Inativo'}
+📉 Under/Over: ${useUnderOverStrategy ? '✅ Ativo' : '❌ Inativo'}
 
 Use /status para acompanhar
 Use /stop para encerrar
@@ -71,6 +71,7 @@ Use /stop para encerrar
 
       try {
         await client.connect();
+        this.startSearchingAnimation(chatId);
       } catch (error) {
         this.bot.sendMessage(chatId, `❌ Erro ao conectar: ${error.message}`);
         this.sessions.delete(chatId);
@@ -87,10 +88,7 @@ Use /stop para encerrar
       if (!goal || !initialStake) {
         this.bot.sendMessage(chatId,
           '❌ Configuração PPCP incompleta.\n' +
-          'Use /config e ajuste:\n' +
-          '- Estratégia: PPCP\n' +
-          '- Meta Global PPCP %\n' +
-          '- Stake Inicial PPCP'
+          'Use /config e ajuste os parâmetros necessários.'
         );
         return;
       }
@@ -98,12 +96,12 @@ Use /stop para encerrar
       const client = new DerivClient(
         user.derivToken,
         goal,
-        null, // maxLosses não é usado na PPCP
+        null,
         chatId,
         this.bot,
-        false, // Digit Differs desativado na PPCP
-        false, // Under/Over desativado na PPCP
-        false, // Martingale padrão desativado, usamos lógica própria PPCP
+        false,
+        false,
+        false,
         maxGlobalLoss,
         this,
         {
@@ -115,25 +113,16 @@ Use /stop para encerrar
       this.sessions.set(chatId, client);
 
       const globalLossText = maxGlobalLoss
-        ? `\n🚨 Max Loss Global PPCP: -${Math.abs(maxGlobalLoss)}%`
-        : '\n🚨 Max Loss Global PPCP: ❌ Desativado';
+        ? `\n🚨 Max Loss Global: -${Math.abs(maxGlobalLoss)}%`
+        : '';
 
       this.bot.sendMessage(chatId, `
-🚀 *Sessão Iniciada (Estratégia PPCP)!*
+🚀 *Sessão Iniciada (PPCP)!*
 
-🎯 Meta Global PPCP: ${goal}%
-💵 Stake Inicial PPCP: ${initialStake.toFixed(2)}
-${globalLossText}
+🎯 Meta: ${goal}%
+💵 Stake Inicial: ${initialStake.toFixed(2)} USD${globalLossText}
 
-📌 Regras PPCP:
-- Opera somente em oportunidades Even/Odd (10x repetição) como já faz hoje;
-- Após *loss*, NÃO entra em sequência: aguarda nova oportunidade;
-- Após cada sessão, objetivo é lucro > 0.01 USD;
-- Se *perder*: próxima stake = 1.5x da stake anterior;
-- Se *ganhar* e o lucro acumulado da sessão ainda < 0.01: próxima stake = 1.94x da stake anterior;
-- Se lucro da sessão >= 0.01: sessão é encerrada como WIN e reseta stake para inicial.
-
-👀 Observando oportunidades...
+📌 Sistema de recuperação inteligente ativo.
 
 Use /status para acompanhar
 Use /stop para encerrar
@@ -141,11 +130,87 @@ Use /stop para encerrar
 
       try {
         await client.connect();
+        this.startSearchingAnimation(chatId);
       } catch (error) {
         this.bot.sendMessage(chatId, `❌ Erro ao conectar: ${error.message}`);
         this.sessions.delete(chatId);
       }
       return;
+    }
+  }
+
+  startSearchingAnimation(chatId) {
+    const emojis = ['🔍', '🔎', '👀', '🎯'];
+    let index = 0;
+
+    const sendSearching = async () => {
+      try {
+        const msg = await this.bot.sendMessage(
+          chatId,
+          `${emojis[index]} *Buscando Oportunidade...*`,
+          { parse_mode: 'Markdown' }
+        );
+        
+        this.searchingMessages.set(chatId, { messageId: msg.message_id, intervalId: null });
+        
+        const intervalId = setInterval(async () => {
+          if (!this.sessions.has(chatId)) {
+            clearInterval(intervalId);
+            this.searchingMessages.delete(chatId);
+            return;
+          }
+
+          const client = this.sessions.get(chatId);
+          if (client && (client.tradingState.isActive || client.digitDifferState?.isActive || client.underOverState?.isActive)) {
+            clearInterval(intervalId);
+            try {
+              await this.bot.deleteMessage(chatId, msg.message_id);
+            } catch (e) {
+              // Mensagem já pode ter sido deletada
+            }
+            this.searchingMessages.delete(chatId);
+            return;
+          }
+
+          index = (index + 1) % emojis.length;
+          try {
+            await this.bot.editMessageText(
+              `${emojis[index]} *Buscando Oportunidade...*`,
+              {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                parse_mode: 'Markdown'
+              }
+            );
+          } catch (e) {
+            // Ignora erros de edição (ex: mensagem não modificada)
+          }
+        }, 2000);
+
+        const searchData = this.searchingMessages.get(chatId);
+        if (searchData) {
+          searchData.intervalId = intervalId;
+        }
+      } catch (error) {
+        console.error(`[${chatId}] Erro ao enviar mensagem de busca:`, error);
+      }
+    };
+
+    sendSearching();
+  }
+
+  stopSearchingAnimation(chatId) {
+    const searchData = this.searchingMessages.get(chatId);
+    if (searchData) {
+      if (searchData.intervalId) {
+        clearInterval(searchData.intervalId);
+      }
+      try {
+        this.bot.deleteMessage(chatId, searchData.messageId);
+      } catch (e) {
+        // Ignora se já foi deletada
+      }
+      this.searchingMessages.delete(chatId);
     }
   }
 
@@ -155,6 +220,7 @@ Use /stop para encerrar
       client.disconnect();
       this.sessions.delete(chatId);
     }
+    this.stopSearchingAnimation(chatId);
   }
 
   getStatus(chatId) {
@@ -166,6 +232,7 @@ Use /stop para encerrar
   stopAll() {
     for (const [chatId, client] of this.sessions) {
       client.disconnect();
+      this.stopSearchingAnimation(chatId);
     }
     this.sessions.clear();
   }
