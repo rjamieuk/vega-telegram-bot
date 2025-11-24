@@ -36,7 +36,9 @@ export class DerivClient {
         currentStake: options.ppcpInitialStake || 1.0,
         sessionTrades: [],   // trades da "sessão PPCP corrente"
         sessionProfit: 0,    // lucro acumulado desta sessão de recuperação
-        inSequence: false    // se está em modo sequência (não aguarda nova oportunidade)
+        inSequence: false,   // se está em modo sequência (não aguarda nova oportunidade)
+        lastSymbol: null,    // símbolo da última operação
+        lastType: null       // tipo da última operação (even/odd)
       };
     } else {
       // Modo padrão (como era antes)
@@ -324,11 +326,10 @@ export class DerivClient {
       return;
     }
 
-    // -------- MODO PPCP: se está em sequência, não precisa aguardar nova oportunidade --------
+    // -------- MODO PPCP: se está em sequência, entra imediatamente --------
     if (this.strategyMode === 'ppcp' && this.ppcpState.inSequence) {
-      // Entra imediatamente no mesmo símbolo e tipo da última operação
-      const lastSymbol = this.tradingState.currentSymbol;
-      const lastType = this.tradingState.currentType;
+      const lastSymbol = this.ppcpState.lastSymbol;
+      const lastType = this.ppcpState.lastType;
 
       if (lastSymbol && lastType) {
         console.log(`[${this.chatId}] PPCP em sequência: entrando imediatamente em ${lastSymbol} ${lastType}`);
@@ -406,6 +407,10 @@ export class DerivClient {
       this.tradingState.currentSymbol = symbol;
       this.tradingState.currentType = tradeType;
       this.tradingState.currentStake = stake;
+
+      // Armazena símbolo e tipo para próximas entradas em sequência
+      this.ppcpState.lastSymbol = symbol;
+      this.ppcpState.lastType = tradeType;
 
       const isSequence = patternInfo.isSequence || false;
 
@@ -537,6 +542,8 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           this.ppcpState.sessionTrades = [];
           this.ppcpState.sessionProfit = 0;
           this.ppcpState.inSequence = false; // sai do modo sequência
+          this.ppcpState.lastSymbol = null;
+          this.ppcpState.lastType = null;
 
           this.resetTradingStateEvenOdd();
         } else {
@@ -558,7 +565,14 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           `;
 
           this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-          this.resetTradingStateEvenOdd();
+          
+          // NÃO reseta o estado completamente, apenas libera para próxima entrada
+          this.tradingState.isActive = false;
+          this.tradingState.contractId = null;
+          if (this.tradingState.timeoutId) {
+            clearTimeout(this.tradingState.timeoutId);
+            this.tradingState.timeoutId = null;
+          }
         }
       } else {
         // LOSS: entra em sequência com stake 1.5x
@@ -580,7 +594,14 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
         `;
 
         this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-        this.resetTradingStateEvenOdd();
+        
+        // NÃO reseta o estado completamente, apenas libera para próxima entrada
+        this.tradingState.isActive = false;
+        this.tradingState.contractId = null;
+        if (this.tradingState.timeoutId) {
+          clearTimeout(this.tradingState.timeoutId);
+          this.tradingState.timeoutId = null;
+        }
       }
 
       return;
