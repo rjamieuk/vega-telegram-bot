@@ -379,6 +379,9 @@ export class DerivClient {
 
   executeEvenOddTrade(symbol, tradeType, patternInfo) {
     if (!this.isConnected) return;
+
+    // parando animação de busca, pois vamos entrar em trade
+    this.notifySearchingStop();
   
     // -------- MODO PPCP --------
     if (this.strategyMode === 'ppcp') {
@@ -518,7 +521,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           const message = `
 ✅ *Trade Vencedor (PPCP)*
 
-💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(5)}
+💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
 🎯 Meta: ${this.goalPercentage}%
@@ -539,7 +542,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 ❌ *Trade Perdido (PPCP)*
 
 💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(5)}
+💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
 🎯 Meta: ${this.goalPercentage}%
@@ -658,6 +661,11 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       sessionTrades: [],
       timeoutId: null
     };
+
+    // se continuar conectado e sem trade ativo, volta a mostrar "Buscando Oportunidade"
+    if (this.isConnected) {
+      this.notifySearchingStart();
+    }
   }
 
   // --------- DIGIT DIFFERS ---------
@@ -689,6 +697,8 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
   executeDigitDifferTrade(symbol, predictionDigit, patternInfo) {
     if (!this.isConnected) return;
     if (this.strategyMode !== 'standard') return;
+
+    this.notifySearchingStop();
 
     let stake = this.balance.current * 0.05;
     if (stake < 0.5) stake = 0.5;
@@ -766,6 +776,10 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       contractId: null,
       timeoutId: null
     };
+
+    if (this.isConnected && !this.tradingState.isActive && !this.underOverState.isActive) {
+      this.notifySearchingStart();
+    }
   }
 
   // --------- UNDER/OVER ---------
@@ -792,6 +806,8 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
   executeUnderOverTrade(symbol, patternInfo) {
     if (!this.isConnected) return;
     if (this.strategyMode !== 'standard') return;
+
+    this.notifySearchingStop();
 
     let stake = this.balance.current * 0.01;
     if (stake < 0.5) stake = 0.5;
@@ -867,6 +883,10 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       contractId: null,
       timeoutId: null
     };
+
+    if (this.isConnected && !this.tradingState.isActive && !this.digitDifferState.isActive) {
+      this.notifySearchingStart();
+    }
   }
 
   // --------- FUNÇÕES COMUNS ---------
@@ -1064,5 +1084,16 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       this.ws = null;
     }
     this.isConnected = false;
+  }
+  notifySearchingStop() {
+    if (this.sessionManager && typeof this.sessionManager.stopSearchingAnimation === 'function') {
+      this.sessionManager.stopSearchingAnimation(this.chatId);
+    }
+  }
+
+  notifySearchingStart() {
+    if (this.sessionManager && typeof this.sessionManager.notifyIdle === 'function') {
+      this.sessionManager.notifyIdle(this.chatId);
+    }
   }
 }

@@ -23,30 +23,23 @@ export class VegaBot {
 
   setupCommands() {
     this.bot.onText(/\/start/, (msg) => {
-      const chatId = msg.chat.id;
-      const welcomeMessage = `
+  const chatId = msg.chat.id;
+  const welcomeMessage = `
 🎯 *Bem-vindo ao Vega Monitor Trading System*
 
-Sou um robô automatizado que opera na Deriv usando estratégias avançadas de análise de padrões em índices de volatilidade.
+Sou um robô automatizado que opera na Deriv com estratégias próprias de análise de padrões e gestão de risco.
 
-*Como começar:*
-1️⃣ Configure sua estratégia: /config
-2️⃣ Inicie uma sessão: /session
-3️⃣ Acompanhe o status: /status
-4️⃣ Pare a sessão: /stop
-
-*Comandos disponíveis:*
-/config - Configurar estratégia e parâmetros
-/session - Iniciar nova sessão
-/status - Ver status atual
-/stop - Parar sessão ativa
-/help - Ajuda
+*Fluxo básico:*
+1️⃣ Configure sua estratégia: /config  
+2️⃣ Inicie uma sessão: /session  
+3️⃣ Acompanhe o status: /status  
+4️⃣ Pare a sessão: /stop  
 
 ⚠️ *Aviso:* Trading envolve riscos. Use apenas capital que pode perder.
-      `;
-      
-      this.bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
-    });
+  `;
+  
+  this.bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
+});
 
     this.bot.onText(/\/help/, (msg) => {
       const chatId = msg.chat.id;
@@ -172,7 +165,7 @@ Em caso de dúvidas, entre em contato com o desenvolvedor.
         const currentStake = status.ppcpState.currentStake || 0;
         statusMessage += `
 💵 *Stake Atual:* ${status.currency} ${currentStake.toFixed(2)}
-💰 *Lucro da Sessão Atual:* ${status.currency} ${sessionProfit.toFixed(5)}
+💰 *Lucro da Sessão Atual:* ${status.currency} ${sessionProfit.toFixed(2)}
 `;
       }
 

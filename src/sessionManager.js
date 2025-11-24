@@ -236,4 +236,14 @@ Use /stop para encerrar
     }
     this.sessions.clear();
   }
+  // Chamado pelo DerivClient sempre que volta a ficar ocioso (sem trade ativo)
+  notifyIdle(chatId) {
+    // Se não existir sessão ativa, não faz nada
+    if (!this.sessions.has(chatId)) return;
+
+    // Se já há uma animação rodando, não recria
+    if (this.searchingMessages.has(chatId)) return;
+
+    this.startSearchingAnimation(chatId);
+  }
 }
