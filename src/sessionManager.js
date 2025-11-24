@@ -201,13 +201,65 @@ Use /stop para encerrar
 💵 Stake Inicial: ${initialStake.toFixed(2)} USD${globalLossText}
 
 📌 Estratégia DigitHunter:
-• Detecta melhores momentos de acumulo
+• Detecta melhores momentos de acúmulo
 • Entra com DIGITMATCH seguindo o estudo
 • Em caso de loss, recupera com fator 1.12x até acertar
 • Ao acertar, encerra sessão e volta stake ao inicial.
 
 Use /status para acompanhar
 Use /stop para encerrar
+      `, { parse_mode: 'Markdown' });
+
+      try {
+        await client.connect();
+        this.startSearchingAnimation(chatId);
+      } catch (error) {
+        this.bot.sendMessage(chatId, `❌ Erro ao conectar: ${error.message}`);
+        this.sessions.delete(chatId);
+      }
+      return;
+    }
+
+    // ========== ESTRATÉGIA HARDTEST ==========
+    if (strategyMode === 'hardtest') {
+      const maxGlobalLoss = user.maxGlobalLoss ?? null;
+
+      const client = new DerivClient(
+        user.token,
+        10,              // HardTest: meta fixa 10% por sessão interna
+        null,
+        chatId,
+        this.bot,
+        false,
+        false,
+        false,
+        maxGlobalLoss,
+        this,
+        { mode: 'hardtest' }
+      );
+
+      this.sessions.set(chatId, client);
+
+      const globalLossText = maxGlobalLoss
+        ? `\n🚨 Max Loss Global: -${Math.abs(maxGlobalLoss)}%`
+        : '';
+
+      this.bot.sendMessage(chatId, `
+🚀 *Sessão Iniciada (HardTest)!*
+
+📌 Estratégia HardTest:
+• Usa DIGITMATCH com dígito aleatório (0–9) a cada entrada
+• Stake = 0.5% do saldo (mínimo 0.35 USD, arredondado com 2 casas decimais)
+• Fator de recuperação: 1.13x em caso de loss
+• Meta da sessão HardTest: lucro > 10% sobre o saldo do início da sessão
+• Ao atingir meta: encerra sessão HardTest atual e inicia nova automaticamente com novo cálculo de 0.5%
+• Após 20 perdas consecutivas: assume prejuízo da sessão e inicia nova automaticamente com novo 0.5%
+• O método só para quando você digitar /stop
+
+${globalLossText}
+
+Use /status para acompanhar
+Use /stop para encerrar totalmente
       `, { parse_mode: 'Markdown' });
 
       try {
@@ -247,13 +299,14 @@ Use /stop para encerrar
             client.tradingState.isActive ||
             client.digitDifferState?.isActive ||
             client.underOverState?.isActive ||
-            client.digitHunterTradeState?.isActive
+            client.digitHunterTradeState?.isActive ||
+            client.hardTestState?.trade?.isActive
           )) {
             clearInterval(intervalId);
             try {
               await this.bot.deleteMessage(chatId, msg.message_id);
             } catch (e) {
-              // Mensagem já pode ter sido deletada
+              // mensagem já pode ter sido deletada
             }
             this.searchingMessages.delete(chatId);
             return;
@@ -270,7 +323,7 @@ Use /stop para encerrar
               }
             );
           } catch (e) {
-            // Ignora erros de edição
+            // ignora erros de edição
           }
         }, 2000);
 

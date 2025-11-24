@@ -61,7 +61,11 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
         return;
       }
 
-      const modeLabel = status.strategyMode === 'ppcp' ? 'PPCP' : status.strategyMode === 'digithunter' ? 'DigitHunter' : 'Default';
+      let modeLabel = 'Default';
+      if (status.strategyMode === 'ppcp') modeLabel = 'PPCP';
+      else if (status.strategyMode === 'digithunter') modeLabel = 'DigitHunter';
+      else if (status.strategyMode === 'hardtest') modeLabel = 'HardTest';
+
       const globalLossText = status.maxGlobalLoss 
         ? `\n🚨 *Max Loss Global:* -${Math.abs(status.maxGlobalLoss)}%` 
         : '';
@@ -84,6 +88,11 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
 💵 *Stake Inicial:* ${status.currency} ${status.digitHunterState.initialStake.toFixed(2)}
 💰 *Stake Atual:* ${status.currency} ${status.digitHunterState.currentStake.toFixed(2)}
 🔄 *Em Sequência:* ${status.digitHunterState.inSequence ? '✅ Sim' : '❌ Não'}`;
+      } else if (status.strategyMode === 'hardtest' && status.hardTestState) {
+        strategyInfo = `
+💵 *Stake Base (0.5%):* ${status.currency} ${status.hardTestState.baseStake.toFixed(2)}
+💰 *Stake Atual:* ${status.currency} ${status.hardTestState.currentStake.toFixed(2)}
+📋 *Sessões HardTest Internas:* ✅ ${status.hardTestState.winSessions} | ❌ ${status.hardTestState.lossSessions}`;
       }
 
       const message = `
@@ -96,7 +105,7 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
 📊 *Crescimento:* ${status.growth.toFixed(2)}%
 🎯 *Meta:* ${status.goalPercentage}%${globalLossText}
 
-📋 *Sessões:* ${status.totalSessions}
+📋 *Sessões Globais:* ${status.totalSessions}
 ✅ *Vitórias:* ${status.winSessions}
 ❌ *Derrotas:* ${status.lossSessions}
 📊 *Taxa de Vitória:* ${status.winRate.toFixed(2)}%
@@ -125,7 +134,8 @@ Escolha sua estratégia:
           { text: currentMode === 'ppcp' ? '✅ PPCP' : 'PPCP', callback_data: 'mode_ppcp' }
         ],
         [
-          { text: currentMode === 'digithunter' ? '✅ DigitHunter' : 'DigitHunter', callback_data: 'mode_digithunter' }
+          { text: currentMode === 'digithunter' ? '✅ DigitHunter' : 'DigitHunter', callback_data: 'mode_digithunter' },
+          { text: currentMode === 'hardtest' ? '✅ HardTest' : 'HardTest', callback_data: 'mode_hardtest' }
         ]
       ]
     };
@@ -143,36 +153,38 @@ Escolha sua estratégia:
       this.showPPCPConfigMenu(chatId);
     } else if (mode === 'digithunter') {
       this.showDigitHunterConfigMenu(chatId);
+    } else if (mode === 'hardtest') {
+      this.showHardTestConfigMenu(chatId);
     } else {
       this.showStandardConfigMenu(chatId);
     }
   }
 
-  // ✅ FUNÇÃO AUXILIAR: verifica se config PPCP está completa
   isPPCPConfigComplete(chatId) {
     const token = this.userStore.getToken(chatId);
     const goal = this.userStore.getGoalPercentage(chatId);
     const stake = this.userStore.getPPCPInitialStake(chatId);
     const direction = this.userStore.getPPCPDirection(chatId);
-
     return !!(token && goal && stake && direction);
   }
 
-  // ✅ FUNÇÃO AUXILIAR: verifica se config Default está completa
   isStandardConfigComplete(chatId) {
     const token = this.userStore.getToken(chatId);
     const goal = this.userStore.getGoalPercentage(chatId);
-
     return !!(token && goal);
   }
 
-  // ✅ FUNÇÃO AUXILIAR: verifica se config DigitHunter está completa
   isDigitHunterConfigComplete(chatId) {
     const token = this.userStore.getToken(chatId);
     const goal = this.userStore.getGoalPercentage(chatId);
     const stake = this.userStore.getDigitHunterInitialStake(chatId);
-
     return !!(token && goal && stake);
+  }
+
+  // HardTest: precisa só de token (meta e stake são fixos internamente)
+  isHardTestConfigComplete(chatId) {
+    const token = this.userStore.getToken(chatId);
+    return !!token;
   }
 
   showPPCPConfigMenu(chatId) {
@@ -209,7 +221,6 @@ Escolha o que deseja configurar:
       ]
     };
 
-    // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
     if (this.isPPCPConfigComplete(chatId)) {
       keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
@@ -252,8 +263,48 @@ Escolha o que deseja configurar:
       ]
     };
 
-    // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
     if (this.isDigitHunterConfigComplete(chatId)) {
+      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+        [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
+      );
+    }
+
+    this.bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+  }
+
+  // HardTest config – só mostra info e botão iniciar se tiver token
+  showHardTestConfigMenu(chatId) {
+    const token = this.userStore.getToken(chatId);
+    const maxGlobalLoss = this.userStore.getMaxGlobalLoss(chatId);
+
+    const tokenStatus = token ? '✅' : '❌';
+    const globalLossText = maxGlobalLoss ? `${maxGlobalLoss}%` : 'Não definido';
+
+    const message = `
+⚙️ *Configurações HardTest*
+
+${tokenStatus} *Token API:* ${token ? 'Configurado' : 'Não configurado'}
+🎯 *Meta Interna da Estratégia:* 10% por sessão HardTest
+💵 *Stake Inicial por Sessão:* 0.5% do saldo (mínimo 0.35 USD)
+🚨 *Max Loss Global:* ${globalLossText}
+
+*Atenção:* HardTest executa em loop até que você use /stop.
+
+Escolha o que deseja configurar:
+    `;
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
+        [{ text: '🚨 Definir Max Loss Global', callback_data: 'config_global_loss' }],
+        [{ text: '🔙 Voltar', callback_data: 'back_to_mode_selection' }]
+      ]
+    };
+
+    if (this.isHardTestConfigComplete(chatId)) {
       keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
       );
@@ -307,7 +358,6 @@ Escolha o que deseja configurar:
       ]
     };
 
-    // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
     if (this.isStandardConfigComplete(chatId)) {
       keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
@@ -325,7 +375,7 @@ Escolha o que deseja configurar:
       const chatId = query.message.chat.id;
       const data = query.data;
 
-      // ✅ CALLBACK PARA INICIAR SESSÃO
+      // INICIAR SESSÃO
       if (data === 'start_session') {
         this.bot.answerCallbackQuery(query.id);
         this.bot.deleteMessage(chatId, query.message.message_id);
@@ -358,6 +408,35 @@ Escolha o que deseja configurar:
         return;
       }
 
+      // HardTest: exige senha 159753 ao selecionar
+      if (data === 'mode_hardtest') {
+        this.bot.answerCallbackQuery(query.id);
+        this.bot.sendMessage(
+          chatId,
+          '🔐 *Acesso Restrito*\n\nDigite a senha para habilitar a estratégia HardTest:',
+          { parse_mode: 'Markdown' }
+        );
+
+        const passwordListener = (msg) => {
+          if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
+            const pwd = msg.text.trim();
+            if (pwd === '159753') {
+              this.userStore.setStrategyMode(chatId, 'hardtest');
+              this.bot.sendMessage(chatId, '✅ HardTest habilitada para este chat.');
+              this.bot.removeListener('message', passwordListener);
+              this.showStrategyConfigMenu(chatId);
+            } else {
+              this.bot.sendMessage(chatId, '❌ Senha incorreta. A estratégia HardTest não foi habilitada.');
+              this.bot.removeListener('message', passwordListener);
+              this.showConfigMenu(chatId);
+            }
+          }
+        };
+
+        this.bot.on('message', passwordListener);
+        return;
+      }
+
       if (data === 'back_to_mode_selection') {
         this.bot.deleteMessage(chatId, query.message.message_id);
         this.showConfigMenu(chatId);
@@ -370,7 +449,7 @@ Escolha o que deseja configurar:
         return;
       }
 
-      // Configurações comuns
+      // Configurações comuns (token / goal / global loss) – mantidas
       if (data === 'config_token') {
         this.bot.answerCallbackQuery(query.id);
         this.bot.sendMessage(chatId, '🔑 *Configurar Token API*\n\nEnvie seu token da Deriv:', { parse_mode: 'Markdown' });
@@ -412,14 +491,23 @@ Escolha o que deseja configurar:
 
       if (data === 'config_global_loss') {
         this.bot.answerCallbackQuery(query.id);
-        this.bot.sendMessage(chatId, '🚨 *Definir Max Loss Global*\n\nEnvie a porcentagem máxima de perda (ex: 10 para -10%) ou "0" para desativar:', { parse_mode: 'Markdown' });
+        this.bot.sendMessage(
+          chatId,
+          '🚨 *Definir Max Loss Global*\n\nEnvie a porcentagem máxima de perda (ex: 10 para -10%) ou "0" para desativar:',
+          { parse_mode: 'Markdown' }
+        );
         
         const lossListener = (msg) => {
           if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
             const percentage = parseFloat(msg.text);
             if (!isNaN(percentage) && percentage >= 0) {
               this.userStore.setMaxGlobalLoss(chatId, percentage === 0 ? null : percentage);
-              this.bot.sendMessage(chatId, percentage === 0 ? '✅ Max Loss Global desativado' : `✅ Max Loss Global definido para -${percentage}%`);
+              this.bot.sendMessage(
+                chatId,
+                percentage === 0
+                  ? '✅ Max Loss Global desativado'
+                  : `✅ Max Loss Global definido para -${percentage}%`
+              );
               this.bot.removeListener('message', lossListener);
               this.showStrategyConfigMenu(chatId);
             } else {
@@ -432,7 +520,7 @@ Escolha o que deseja configurar:
         return;
       }
 
-      // Configurações PPCP
+      // PPCP
       if (data === 'config_ppcp_stake') {
         this.bot.answerCallbackQuery(query.id);
         this.bot.sendMessage(chatId, '💵 *Definir Stake Inicial PPCP*\n\nEnvie o valor em USD (ex: 1.0):', { parse_mode: 'Markdown' });
@@ -506,7 +594,7 @@ Direção atual: *${currentDirection === 'favor' ? 'A Favor' : 'Contra'}*
         return;
       }
 
-      // Configurações DigitHunter
+      // DigitHunter
       if (data === 'config_digithunter_stake') {
         this.bot.answerCallbackQuery(query.id);
         this.bot.sendMessage(chatId, '💵 *Definir Stake Inicial DigitHunter*\n\nEnvie o valor em USD (ex: 1.0):', { parse_mode: 'Markdown' });
@@ -529,7 +617,7 @@ Direção atual: *${currentDirection === 'favor' ? 'A Favor' : 'Contra'}*
         return;
       }
 
-      // Configurações Default
+      // Default – martingale / max losses / toggles
       if (data === 'toggle_martingale') {
         const current = this.userStore.getMartingaleEvenOdd(chatId);
         this.userStore.setMartingaleEvenOdd(chatId, !current);

@@ -50,7 +50,10 @@ export class UserStore {
         strategyMode: 'standard',
         ppcpInitialStake: 1.0,
         ppcpDirection: 'against',
-        digitHunterInitialStake: 1.0
+        digitHunterInitialStake: 1.0,
+        // HardTest não precisa de stake configurável (é 0.5% da conta),
+        // mas mantemos flags para dados futuros se precisar
+        hardTestEnabled: true
       };
     }
     // Garantir que campos novos existam em usuários antigos
@@ -65,6 +68,9 @@ export class UserStore {
     }
     if (this.users[chatId].digitHunterInitialStake === undefined) {
       this.users[chatId].digitHunterInitialStake = 1.0;
+    }
+    if (this.users[chatId].hardTestEnabled === undefined) {
+      this.users[chatId].hardTestEnabled = true;
     }
   }
 
@@ -187,6 +193,17 @@ export class UserStore {
   getDigitHunterInitialStake(chatId) {
     this._ensureUser(chatId);
     return this.users[chatId].digitHunterInitialStake || 1.0;
+  }
+
+  setHardTestEnabled(chatId, enabled) {
+    this._ensureUser(chatId);
+    this.users[chatId].hardTestEnabled = enabled;
+    this.save();
+  }
+
+  getHardTestEnabled(chatId) {
+    this._ensureUser(chatId);
+    return this.users[chatId].hardTestEnabled;
   }
 
   getUser(chatId) {

@@ -23,14 +23,17 @@ export class DerivClient {
     this.sessionManager = sessionManager;
 
     // --------- MODO ESTRATÉGIA ---------
-    this.strategyMode = options.mode === 'ppcp'
-      ? 'ppcp'
-      : options.mode === 'digithunter'
-        ? 'digithunter'
-        : 'standard';
+    this.strategyMode =
+      options.mode === 'ppcp'
+        ? 'ppcp'
+        : options.mode === 'digithunter'
+          ? 'digithunter'
+          : options.mode === 'hardtest'
+            ? 'hardtest'
+            : 'standard';
 
+    // Estados por estratégia
     if (this.strategyMode === 'ppcp') {
-      // PPCP não usa DigitDiff/UnderOver, nem martingale padrão
       this.useDigitDifferStrategy = false;
       this.useUnderOverStrategy = false;
       this.useMartingaleEvenOdd = false;
@@ -43,13 +46,13 @@ export class DerivClient {
         inSequence: false,
         lastSymbol: null,
         lastType: null,
-        direction: options.ppcpDirection || 'against' // 'against' ou 'favor'
+        direction: options.ppcpDirection || 'against'
       };
 
       this.digitHunterState = null;
+      this.hardTestState = null;
 
     } else if (this.strategyMode === 'digithunter') {
-      // DigitHunter: não usa Even/Odd nem Under/Over, nem martingale padrão
       this.useDigitDifferStrategy = false;
       this.useUnderOverStrategy = false;
       this.useMartingaleEvenOdd = false;
@@ -58,11 +61,39 @@ export class DerivClient {
       this.digitHunterState = {
         initialStake: options.digitHunterInitialStake || 1.0,
         currentStake: options.digitHunterInitialStake || 1.0,
-        inSequence: false,     // se está repetindo matches para recuperar
-        targetDigit: null,     // dígito que estamos caçando (0-9)
-        lastSymbol: null,      // ativo onde entrou
+        inSequence: false,
+        targetDigit: null,
+        lastSymbol: null,
         sessionProfit: 0,
         sessionTrades: []
+      };
+
+      this.hardTestState = null;
+
+    } else if (this.strategyMode === 'hardtest') {
+      // HardTest não usa outras estratégias
+      this.useDigitDifferStrategy = false;
+      this.useUnderOverStrategy = false;
+      this.useMartingaleEvenOdd = false;
+      this.ppcpState = null;
+      this.digitHunterState = null;
+
+      this.hardTestState = {
+        baseBalanceForSession: 0,
+        currentStake: 0,
+        baseStake: 0,
+        profitInSession: 0,
+        lossesInARow: 0,
+        winSessions: 0,
+        lossSessions: 0,
+        trade: {
+          isActive: false,
+          symbol: null,
+          predictionDigit: null,
+          stake: 0,
+          contractId: null,
+          timeoutId: null
+        }
       };
 
     } else {
@@ -72,21 +103,27 @@ export class DerivClient {
       this.useMartingaleEvenOdd = useMartingaleEvenOdd;
       this.ppcpState = null;
       this.digitHunterState = null;
+      this.hardTestState = null;
     }
 
     this.ws = null;
     this.isConnected = false;
 
-    this.balance = { initial: 0, current: 0, currency: 'USD' };
+    this.balance = {
+      initial: 0,
+      current: 0,
+      currency: 'USD'
+    };
+
     this.digitHistory = {};
     this.sessionHistory = [];
     this.startTime = Date.now();
 
-    // Estado de trading para Even/Odd
+    // Estado da estratégia principal (Even/Odd Martingale)
     this.tradingState = {
       isActive: false,
       currentSymbol: null,
-      currentType: null, // 'even' | 'odd'
+      currentType: null,
       attemptNumber: 0,
       baseStake: 0,
       currentStake: 0,
@@ -96,7 +133,7 @@ export class DerivClient {
       timeoutId: null
     };
 
-    // Estado de trading separado para Digit Differs
+    // Estado Digit Differ
     this.digitDifferState = {
       isActive: false,
       currentSymbol: null,
@@ -106,7 +143,7 @@ export class DerivClient {
       timeoutId: null
     };
 
-    // Estado de trading para Under/Over
+    // Estado Under/Over
     this.underOverState = {
       isActive: false,
       currentSymbol: null,
@@ -115,7 +152,7 @@ export class DerivClient {
       timeoutId: null
     };
 
-    // Estado de trading para DigitHunter (digit matches)
+    // Estado DigitHunter (trade)
     this.digitHunterTradeState = {
       isActive: false,
       currentSymbol: null,
@@ -125,6 +162,7 @@ export class DerivClient {
       timeoutId: null
     };
 
+    // Símbolos
     this.symbols = {
       '1HZ10V': { name: 'Volatility 10 (1s)', decimals: 2 },
       '1HZ25V': { name: 'Volatility 25 (1s)', decimals: 2 },
@@ -140,6 +178,9 @@ export class DerivClient {
     });
   }
 
+  // ======================================================
+  // CONEXÃO
+  // ======================================================
   async connect() {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
@@ -173,6 +214,9 @@ export class DerivClient {
     });
   }
 
+  // ======================================================
+  // HANDLER MENSAGENS WS
+  // ======================================================
   handleMessage(data) {
     if (data.error) {
       console.error(`[${this.chatId}] Erro API:`, data.error);
@@ -186,9 +230,23 @@ export class DerivClient {
       this.balance.current = parseFloat(data.authorize.balance);
       this.balance.currency = data.authorize.currency;
 
-      this.ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+      // HardTest: define saldo base e stake base da sessão
+      if (this.strategyMode === 'hardtest' && this.hardTestState) {
+        this.initHardTestSession();
+      }
+
+      // Assinar saldo
+      this.ws.send(JSON.stringify({
+        balance: 1,
+        subscribe: 1
+      }));
+
+      // Assinar ticks
       Object.keys(this.symbols).forEach(symbol => {
-        this.ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
+        this.ws.send(JSON.stringify({
+          ticks: symbol,
+          subscribe: 1
+        }));
       });
     }
 
@@ -203,48 +261,45 @@ export class DerivClient {
     }
 
     if (data.msg_type === 'proposal' && data.proposal) {
-      const proposalId = data.proposal.id;
-      const contractType = data.proposal.contract_type;
+      const proposal = data.proposal;
+      const proposalId = proposal.id;
+      const contractType = proposal.contract_type;
 
       console.log(
-        `[${this.chatId}] Proposta recebida: ${proposalId} (${contractType}), ask_price: ${data.proposal.ask_price}`
+        `[${this.chatId}] Proposta recebida: ${proposalId} (${contractType}), ask_price: ${proposal.ask_price}`
       );
 
+      // Compra automática
       this.ws.send(JSON.stringify({
         buy: proposalId,
-        price: data.proposal.ask_price
+        price: proposal.ask_price
       }));
     }
 
     if (data.msg_type === 'buy' && data.buy) {
-      const contractId = data.buy.contract_id;
-      const contractType = data.buy.contract_type;
+      const contract = data.buy;
+      const contractId = contract.contract_id;
+      const contractType = contract.contract_type;
 
       console.log(
-        `[${this.chatId}] ✅ Contrato comprado: ${contractId} (${contractType}) ` +
-        `| estados: EvenOdd.isActive=${this.tradingState.isActive}, ` +
-        `DigitDiff.isActive=${this.digitDifferState.isActive}, ` +
-        `UnderOver.isActive=${this.underOverState.isActive}, ` +
-        `DigitHunter.isActive=${this.digitHunterTradeState.isActive}`
+        `[${this.chatId}] ✅ Contrato comprado: ${contractId} (${contractType}) | ` +
+        `EvenOdd=${this.tradingState.isActive}, DigitDiff=${this.digitDifferState.isActive}, ` +
+        `UnderOver=${this.underOverState.isActive}, DigitHunter=${this.digitHunterTradeState.isActive}, ` +
+        `HardTest=${this.hardTestState?.trade?.isActive}`
       );
 
+      // Identifica qual estratégia está ativa
       if (this.tradingState.isActive &&
           !this.digitDifferState.isActive &&
           !this.underOverState.isActive &&
-          !this.digitHunterTradeState.isActive) {
+          !this.digitHunterTradeState.isActive &&
+          !this.hardTestState?.trade?.isActive) {
 
         this.tradingState.contractId = contractId;
-        console.log(`[${this.chatId}] 🔵 Armazenado contractId Even/Odd: ${contractId}`);
-
         this.tradingState.timeoutId = setTimeout(() => {
-          console.log(
-            `[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} (Even/Odd) não retornou resultado em 15s`
-          );
           this.bot.sendMessage(
             this.chatId,
-            `⚠️ *Timeout no contrato Even/Odd*\n\n` +
-            `O contrato ${contractId} não retornou resultado.\n` +
-            `Resetando estado para continuar operando...`,
+            `⚠️ *Timeout no contrato Even/Odd*\n\nContrato ${contractId} sem retorno em 15s.\nResetando estado...`,
             { parse_mode: 'Markdown' }
           );
           this.resetTradingStateEvenOdd();
@@ -253,20 +308,14 @@ export class DerivClient {
       } else if (this.digitDifferState.isActive &&
                  !this.tradingState.isActive &&
                  !this.underOverState.isActive &&
-                 !this.digitHunterTradeState.isActive) {
+                 !this.digitHunterTradeState.isActive &&
+                 !this.hardTestState?.trade?.isActive) {
 
         this.digitDifferState.contractId = contractId;
-        console.log(`[${this.chatId}] 🟣 Armazenado contractId Digit Differs: ${contractId}`);
-
         this.digitDifferState.timeoutId = setTimeout(() => {
-          console.log(
-            `[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} (DigitDiff) não retornou resultado em 15s`
-          );
           this.bot.sendMessage(
             this.chatId,
-            `⚠️ *Timeout no contrato Digit Differs*\n\n` +
-            `O contrato ${contractId} não retornou resultado.\n` +
-            `Resetando estado para continuar operando...`,
+            `⚠️ *Timeout no contrato Digit Differs*\n\nContrato ${contractId} sem retorno em 15s.\nResetando estado...`,
             { parse_mode: 'Markdown' }
           );
           this.resetDigitDifferState();
@@ -275,20 +324,14 @@ export class DerivClient {
       } else if (this.underOverState.isActive &&
                  !this.tradingState.isActive &&
                  !this.digitDifferState.isActive &&
-                 !this.digitHunterTradeState.isActive) {
+                 !this.digitHunterTradeState.isActive &&
+                 !this.hardTestState?.trade?.isActive) {
 
         this.underOverState.contractId = contractId;
-        console.log(`[${this.chatId}] 🟠 Armazenado contractId Under/Over: ${contractId}`);
-
         this.underOverState.timeoutId = setTimeout(() => {
-          console.log(
-            `[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} (UnderOver) não retornou resultado em 15s`
-          );
           this.bot.sendMessage(
             this.chatId,
-            `⚠️ *Timeout no contrato Under/Over*\n\n` +
-            `O contrato ${contractId} não retornou resultado.\n` +
-            `Resetando estado para continuar operando...`,
+            `⚠️ *Timeout no contrato Under/Over*\n\nContrato ${contractId} sem retorno em 15s.\nResetando estado...`,
             { parse_mode: 'Markdown' }
           );
           this.resetUnderOverState();
@@ -297,35 +340,40 @@ export class DerivClient {
       } else if (this.digitHunterTradeState.isActive &&
                  !this.tradingState.isActive &&
                  !this.digitDifferState.isActive &&
-                 !this.underOverState.isActive) {
+                 !this.underOverState.isActive &&
+                 !this.hardTestState?.trade?.isActive) {
 
         this.digitHunterTradeState.contractId = contractId;
-        console.log(`[${this.chatId}] 🟥 Armazenado contractId DigitHunter: ${contractId}`);
-
         this.digitHunterTradeState.timeoutId = setTimeout(() => {
-          console.log(
-            `[${this.chatId}] ⚠️ TIMEOUT: Contrato ${contractId} (DigitHunter) não retornou resultado em 15s`
-          );
           this.bot.sendMessage(
             this.chatId,
-            `⚠️ *Timeout no contrato DigitHunter*\n\n` +
-            `O contrato ${contractId} não retornou resultado.\n` +
-            `Resetando estado para continuar operando...`,
+            `⚠️ *Timeout no contrato DigitHunter*\n\nContrato ${contractId} sem retorno em 15s.\nResetando estado...`,
             { parse_mode: 'Markdown' }
           );
           this.resetDigitHunterTradeState();
         }, 15000);
 
+      } else if (this.hardTestState?.trade?.isActive &&
+                 !this.tradingState.isActive &&
+                 !this.digitDifferState.isActive &&
+                 !this.underOverState.isActive &&
+                 !this.digitHunterTradeState.isActive) {
+
+        this.hardTestState.trade.contractId = contractId;
+        this.hardTestState.trade.timeoutId = setTimeout(() => {
+          this.bot.sendMessage(
+            this.chatId,
+            `⚠️ *Timeout no contrato HardTest*\n\nContrato ${contractId} sem retorno em 15s.\nResetando estado...`,
+            { parse_mode: 'Markdown' }
+          );
+          this.resetHardTestTradeState();
+        }, 15000);
+
       } else {
-        console.log(
-          `[${this.chatId}] ⚠️ BUY recebido mas não há estratégia claramente ativa. ` +
-          `EvenOdd.isActive=${this.tradingState.isActive}, ` +
-          `DigitDiff.isActive=${this.digitDifferState.isActive}, ` +
-          `UnderOver.isActive=${this.underOverState.isActive}, ` +
-          `DigitHunter.isActive=${this.digitHunterTradeState.isActive}`
-        );
+        console.log(`[${this.chatId}] ⚠️ BUY recebido sem estratégia ativa clara.`);
       }
 
+      // Assinar contrato
       this.ws.send(JSON.stringify({
         proposal_open_contract: 1,
         contract_id: contractId,
@@ -336,63 +384,48 @@ export class DerivClient {
     if (data.msg_type === 'proposal_open_contract') {
       const poc = data.proposal_open_contract;
 
-      console.log(`[${this.chatId}] 📨 proposal_open_contract recebido:`, {
-        contract_id: poc.contract_id,
-        contract_type: poc.contract_type,
-        is_sold: poc.is_sold,
-        status: poc.status,
-        profit: poc.profit,
-        evenOddContractId: this.tradingState.contractId,
-        digitDifferContractId: this.digitDifferState.contractId,
-        underOverContractId: this.underOverState.contractId,
-        digitHunterContractId: this.digitHunterTradeState.contractId
-      });
-
       if (poc && poc.is_sold) {
         const profit = parseFloat(poc.profit);
         const contractId = poc.contract_id;
 
-        console.log(`[${this.chatId}] 🏁 Contrato finalizado: ${contractId} - Profit: ${profit}`);
+        console.log(
+          `[${this.chatId}] 🏁 Contrato finalizado: ${contractId} - Profit: ${profit}`
+        );
 
         if (this.tradingState.contractId === contractId) {
-          console.log(`[${this.chatId}] ✅ Processando resultado Even/Odd`);
-
           if (this.tradingState.timeoutId) {
             clearTimeout(this.tradingState.timeoutId);
             this.tradingState.timeoutId = null;
           }
-
           this.handleEvenOddTradeResult(profit > 0, profit);
 
         } else if (this.digitDifferState.contractId === contractId) {
-          console.log(`[${this.chatId}] ✅ Processando resultado Digit Differs`);
-
           if (this.digitDifferState.timeoutId) {
             clearTimeout(this.digitDifferState.timeoutId);
             this.digitDifferState.timeoutId = null;
           }
-
           this.handleDigitDifferResult(profit > 0, profit);
 
         } else if (this.underOverState.contractId === contractId) {
-          console.log(`[${this.chatId}] ✅ Processando resultado Under/Over`);
-
           if (this.underOverState.timeoutId) {
             clearTimeout(this.underOverState.timeoutId);
             this.underOverState.timeoutId = null;
           }
-
           this.handleUnderOverResult(profit > 0, profit);
 
         } else if (this.digitHunterTradeState.contractId === contractId) {
-          console.log(`[${this.chatId}] ✅ Processando resultado DigitHunter`);
-
           if (this.digitHunterTradeState.timeoutId) {
             clearTimeout(this.digitHunterTradeState.timeoutId);
             this.digitHunterTradeState.timeoutId = null;
           }
-
           this.handleDigitHunterResult(profit > 0, profit);
+
+        } else if (this.hardTestState?.trade?.contractId === contractId) {
+          if (this.hardTestState.trade.timeoutId) {
+            clearTimeout(this.hardTestState.trade.timeoutId);
+            this.hardTestState.trade.timeoutId = null;
+          }
+          this.handleHardTestResult(profit > 0, profit);
 
         } else {
           console.log(
@@ -403,6 +436,9 @@ export class DerivClient {
     }
   }
 
+  // ======================================================
+  // TICKS
+  // ======================================================
   handleTick(tick) {
     const symbol = tick.symbol;
     const price = tick.quote;
@@ -414,7 +450,8 @@ export class DerivClient {
     const lastDigit = priceStr.charAt(priceStr.length - 1);
 
     this.digitHistory[symbol].push(lastDigit);
-    if (this.digitHistory[symbol].length > 10) {
+
+    if (this.digitHistory[symbol].length > 20) {
       this.digitHistory[symbol].shift();
     }
 
@@ -422,36 +459,31 @@ export class DerivClient {
       this.tradingState.isActive ||
       this.digitDifferState.isActive ||
       this.underOverState.isActive ||
-      this.digitHunterTradeState.isActive;
+      this.digitHunterTradeState.isActive ||
+      (this.hardTestState?.trade?.isActive ?? false);
 
     if (anyTradeActive) {
       return;
     }
 
-    // -------- MODO PPCP: se está em sequência (Even/Odd), entra imediatamente --------
-    if (this.strategyMode === 'ppcp' && this.ppcpState.inSequence) {
+    // -------- MODO PPCP: sequência de Even/Odd
+    if (this.strategyMode === 'ppcp' && this.ppcpState?.inSequence) {
       const lastSymbol = this.ppcpState.lastSymbol;
       const lastType = this.ppcpState.lastType;
 
       if (lastSymbol && lastType) {
-        console.log(
-          `[${this.chatId}] PPCP em sequência: entrando imediatamente em ${lastSymbol} ${lastType}`
-        );
         this.executeEvenOddTrade(lastSymbol, lastType, { isSequence: true });
         return;
       }
     }
 
-    // -------- MODO DIGITHUNTER: se está em sequência, entra imediatamente (digit matches) --------
+    // -------- MODO DIGITHUNTER: sequência seguindo mesmo dígito
     if (this.strategyMode === 'digithunter' &&
         this.digitHunterState &&
         this.digitHunterState.inSequence &&
         this.digitHunterState.lastSymbol &&
         this.digitHunterState.targetDigit !== null) {
 
-      console.log(
-        `[${this.chatId}] DigitHunter em sequência: entrando imediatamente em ${this.digitHunterState.lastSymbol} digit ${this.digitHunterState.targetDigit}`
-      );
       this.executeDigitHunterTrade(
         this.digitHunterState.lastSymbol,
         this.digitHunterState.targetDigit,
@@ -460,9 +492,13 @@ export class DerivClient {
       return;
     }
 
-    // ===================== ROTEAMENTO POR MODO =====================
+    // -------- MODO HARDTEST: entradas constantes
+    if (this.strategyMode === 'hardtest' && this.hardTestState) {
+      this.executeHardTestTrade(symbol);
+      return;
+    }
 
-    // 1) Modo DIGITHUNTER: só faz a lógica DigitHunter
+    // ===================== ROTEAMENTO POR MODO =====================
     if (this.strategyMode === 'digithunter') {
       const dhPattern = this.analyzePatternDigitHunter(symbol);
       if (dhPattern.isOpportunity) {
@@ -471,7 +507,6 @@ export class DerivClient {
       return;
     }
 
-    // 2) Modo PPCP: usa apenas Even/Odd com lógica de direção
     if (this.strategyMode === 'ppcp') {
       const pattern = this.analyzePatternEvenOdd(symbol);
       if (pattern.isOpportunity) {
@@ -480,16 +515,13 @@ export class DerivClient {
       return;
     }
 
-    // 3) Modo STANDARD (Default): Even/Odd, Under/Over, DigitDiffers
-
-    // 3.1) Oportunidades Even/Odd
+    // MODO PADRÃO (Default)
     const pattern = this.analyzePatternEvenOdd(symbol);
     if (pattern.isOpportunity) {
       this.executeEvenOddTrade(symbol, pattern.suggestion, pattern);
       return;
     }
 
-    // 3.2) Oportunidades Under/Over (se habilitado)
     if (this.useUnderOverStrategy) {
       const underOverPattern = this.analyzePatternUnderOver(symbol);
       if (underOverPattern.isOpportunity) {
@@ -498,7 +530,6 @@ export class DerivClient {
       }
     }
 
-    // 3.3) Oportunidades Digit Differs (se habilitado)
     if (this.useDigitDifferStrategy) {
       const diffPattern = this.analyzePatternDigitDiffer(symbol);
       if (diffPattern.isOpportunity) {
@@ -507,139 +538,82 @@ export class DerivClient {
     }
   }
 
-  // --------- ESTRATÉGIA EVEN/ODD (standard + PPCP) ---------
+  // ======================================================
+  // PADRÃO EVENS / ODDS
+  // ======================================================
   analyzePatternEvenOdd(symbol) {
     const history = this.digitHistory[symbol];
-
     if (history.length < 10) {
-      return { type: 'Coletando', count: history.length, isOpportunity: false };
+      return { isOpportunity: false };
     }
 
     const last10 = history.slice(-10);
-    let evenCount = 0;
-    let oddCount = 0;
+    const evenCount = last10.filter(d => parseInt(d) % 2 === 0).length;
+    const oddCount = 10 - evenCount;
 
-    last10.forEach(digit => {
-      if (parseInt(digit) % 2 === 0) evenCount++;
-      else oddCount++;
-    });
-
-    // -------- LÓGICA DE DIREÇÃO (PPCP) --------
-    if (this.strategyMode === 'ppcp') {
-      const direction = this.ppcpState.direction;
-
-      if (evenCount === 10) {
-        if (direction === 'favor') {
-          return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'even' };
-        } else {
-          return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'odd' };
-        }
-      } else if (oddCount === 10) {
-        if (direction === 'favor') {
-          return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'odd' };
-        } else {
-          return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'even' };
-        }
-      }
-    } else {
-      // Modo padrão: sempre vai contra
-      if (evenCount === 10) {
-        return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'odd' };
-      } else if (oddCount === 10) {
-        return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'even' };
-      }
+    if (evenCount === 10) {
+      return {
+        isOpportunity: true,
+        suggestion: 'odd',
+        count: 10,
+        type: 'even'
+      };
+    } else if (oddCount === 10) {
+      return {
+        isOpportunity: true,
+        suggestion: 'even',
+        count: 10,
+        type: 'odd'
+      };
     }
 
-    return { type: 'MIXED', count: 0, isOpportunity: false };
+    return { isOpportunity: false };
   }
 
-  executeEvenOddTrade(symbol, tradeType, patternInfo) {
+  executeEvenOddTrade(symbol, type, pattern) {
     if (!this.isConnected) return;
 
     this.notifySearchingStop();
 
-    // -------- MODO PPCP --------
-    if (this.strategyMode === 'ppcp') {
-      const stake = this.ppcpState.currentStake;
-
-      this.tradingState.isActive = true;
-      this.tradingState.currentSymbol = symbol;
-      this.tradingState.currentType = tradeType;
-      this.tradingState.currentStake = stake;
-
-      this.ppcpState.lastSymbol = symbol;
-      this.ppcpState.lastType = tradeType;
-
-      const isSequence = patternInfo.isSequence || false;
-
-      const message = isSequence
-        ? `
-🔄 *Entrada em Sequência (PPCP)*
-
-📊 Ativo: ${this.symbols[symbol].name}
-💰 Entrada: ${tradeType.toUpperCase()}
-💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
-📌 Modo: Recuperação ativa
-        `
-        : `
-🎯 *Oportunidade Detectada (PPCP)*
-
-📊 Ativo: ${this.symbols[symbol].name}
-🔢 Padrão: 10x ${patternInfo.type}
-💰 Entrada: ${tradeType.toUpperCase()}
-💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
-📌 Modo: PPCP
-        `;
-
-      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
-      const proposal = {
-        proposal: 1,
-        amount: stake,
-        basis: 'stake',
-        contract_type: tradeType === 'even' ? 'DIGITEVEN' : 'DIGITODD',
-        currency: this.balance.currency,
-        duration: 1,
-        duration_unit: 't',
-        symbol: symbol
-      };
-
-      this.ws.send(JSON.stringify(proposal));
-      return;
-    }
-
-    // -------- MODO PADRÃO --------
-    if (this.tradingState.attemptNumber === 0) {
-      let base = this.balance.current * 0.005;
-      if (base < 0.5) base = 0.5;
-      this.tradingState.baseStake = Math.round(base * 100) / 100;
-    }
-
     this.tradingState.isActive = true;
     this.tradingState.currentSymbol = symbol;
-    this.tradingState.currentType = tradeType;
-    this.tradingState.currentStake = this.calculateStakeEvenOdd();
+    this.tradingState.currentType = type;
 
-    const martingaleStatus = this.useMartingaleEvenOdd ? '✅ Ativo' : '❌ Desativado';
+    // PPCP: stake vem da sequência; Default: stake calculada
+    let stake = 0;
+    if (this.strategyMode === 'ppcp' && this.ppcpState) {
+      stake = this.ppcpState.currentStake;
+    } else {
+      if (this.tradingState.attemptNumber === 0) {
+        const stakeInfo = this.calculateStakeEvenOdd();
+        this.tradingState.baseStake = stakeInfo.baseStake;
+        stake = stakeInfo.baseStake;
+      } else {
+        stake = this.tradingState.currentStake;
+      }
+    }
 
+    this.tradingState.currentStake = stake;
+
+    const digitHistory = this.digitHistory[symbol].slice(-10).join(' ');
     const message = `
-🎯 *Oportunidade Detectada (Even/Odd)!*
+🎯 *Entrada Encontrada (Even/Odd)*
 
 📊 Ativo: ${this.symbols[symbol].name}
-🔢 Padrão: 10x ${tradeType === 'even' ? 'ÍMPARES' : 'PARES'}
-💰 Entrada: ${tradeType.toUpperCase()}
-💵 Stake: ${this.balance.currency} ${this.tradingState.currentStake.toFixed(2)}
-🔄 Martingale: ${martingaleStatus}
-${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber + 1}/${this.tradingState.maxAttempts}` : ''}
+📈 Últimos 10 dígitos: ${digitHistory}
+🎲 Tipo: *${type.toUpperCase()}*
+💵 Entrada: ${this.balance.currency} ${stake.toFixed(2)}
     `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
+    const contractType = type === 'even' ? 'DIGITEVEN' : 'DIGITODD';
+
     const proposal = {
       proposal: 1,
-      amount: this.tradingState.currentStake,
+      amount: stake,
       basis: 'stake',
-      contract_type: tradeType === 'even' ? 'DIGITEVEN' : 'DIGITODD',
+      contract_type: contractType,
       currency: this.balance.currency,
       duration: 1,
       duration_unit: 't',
@@ -650,524 +624,414 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
   }
 
   calculateStakeEvenOdd() {
-    if (this.useMartingaleEvenOdd) {
-      const stake = this.tradingState.baseStake * Math.pow(2, this.tradingState.attemptNumber);
-      return Math.round(stake * 100) / 100;
-    } else {
-      let stake = this.balance.current * 0.005;
-      if (stake < 0.5) stake = 0.5;
-      return Math.round(stake * 100) / 100;
-    }
+    const riskFactor = {
+      1: 0.5,
+      2: 1.5,
+      3: 3.5,
+      4: 7.5,
+      5: 15.5,
+      6: 31.0
+    }[this.maxLosses] || 31.0;
+
+    const riskAmount = (this.balance.current * riskFactor) / 100;
+
+    let stake = riskAmount / Math.pow(2, this.maxLosses - 1);
+
+    if (stake < 0.35) stake = 0.35;
+
+    return {
+      baseStake: stake
+    };
   }
 
   handleEvenOddTradeResult(isWin, profit) {
-    console.log(`[${this.chatId}] handleEvenOddTradeResult - isWin: ${isWin}, profit: ${profit}`);
-
-    // --------- MODO PPCP ---------
-    if (this.strategyMode === 'ppcp') {
-      const stake = this.tradingState.currentStake;
-      this.ppcpState.sessionTrades.push({
-        stake,
-        profit,
-        isWin
-      });
-
-      this.ppcpState.sessionProfit += profit;
-      const sessionProfit = this.ppcpState.sessionProfit;
-
-      if (isWin) {
-        if (sessionProfit >= 0.01) {
-          this.addSessionToHistory(true, sessionProfit);
-
-          const message = `
-✅ *Trade Vencedor (PPCP)*
-
-💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-
-📌 Sessão encerrada com sucesso.
-🔁 Próxima sessão iniciará com stake inicial ${this.balance.currency} ${this.ppcpState.initialStake.toFixed(2)}.
-          `;
-
-          this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
-          this.ppcpState.currentStake = this.ppcpState.initialStake;
-          this.ppcpState.sessionTrades = [];
-          this.ppcpState.sessionProfit = 0;
-          this.ppcpState.inSequence = false;
-          this.ppcpState.lastSymbol = null;
-          this.ppcpState.lastType = null;
-
-          this.resetTradingStateEvenOdd();
-        } else {
-          const nextStake = Math.round(stake * 1.94 * 100) / 100;
-          this.ppcpState.currentStake = nextStake;
-          this.ppcpState.inSequence = true;
-
-          const message = `
-✅ *Trade Vencedor (PPCP)*
-
-💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-
-➡️ Próxima stake: ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ Entrando em sequência para completar recuperação.
-          `;
-
-          this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
-          this.tradingState.isActive = false;
-          this.tradingState.contractId = null;
-          if (this.tradingState.timeoutId) {
-            clearTimeout(this.tradingState.timeoutId);
-            this.tradingState.timeoutId = null;
-          }
-        }
-      } else {
-        const nextStake = Math.round(stake * 1.5 * 100) / 100;
-        this.ppcpState.currentStake = nextStake;
-        this.ppcpState.inSequence = true;
-
-        const message = `
-❌ *Trade Perdido (PPCP)*
-
-💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-
-➡️ Próxima stake: ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ Sistema de recuperação ativo. Entrando em sequência.
-        `;
-
-        this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
-        this.tradingState.isActive = false;
-        this.tradingState.contractId = null;
-        if (this.tradingState.timeoutId) {
-          clearTimeout(this.tradingState.timeoutId);
-          this.tradingState.timeoutId = null;
-        }
-      }
-
-      return;
-    }
-
-    // --------- MODO PADRÃO ---------
     this.tradingState.sessionTrades.push({
-      attemptNumber: this.tradingState.attemptNumber + 1,
-      stake: this.tradingState.currentStake,
-      profit: profit,
-      isWin: isWin
+      isWin,
+      profit
     });
 
-    this.tradingState.attemptNumber++;
-
-    const sessionProfitLoss = this.tradingState.sessionTrades.reduce((sum, t) => sum + t.profit, 0);
+    const stake = this.tradingState.currentStake;
+    const type = this.tradingState.currentType;
 
     if (isWin) {
-      this.addSessionToHistory(true, sessionProfitLoss);
+      this.tradingState.attemptNumber = 0;
+      this.tradingState.currentStake = this.tradingState.baseStake;
+
+      this.tradingState.isActive = false;
+      this.addSessionToHistory(true, profit);
 
       const message = `
-✅ *Trade Vencedor (Even/Odd)!*
+✅ *Trade Vencedor (Even/Odd)*
 
-💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfitLoss.toFixed(2)}
+🎲 Tipo: *${type.toUpperCase()}*
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
+📊 Crescimento Atual: ${this.getGrowthPercentage().toFixed(2)}%
       `;
 
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-      this.resetTradingStateEvenOdd();
+
+      if (this.isConnected &&
+          !this.digitDifferState.isActive &&
+          !this.underOverState.isActive &&
+          !this.digitHunterTradeState.isActive &&
+          !this.hardTestState?.trade?.isActive) {
+        this.notifySearchingStart();
+      }
 
     } else {
-      if (this.useMartingaleEvenOdd) {
-        if (this.tradingState.attemptNumber >= this.tradingState.maxAttempts) {
-          this.addSessionToHistory(false, sessionProfitLoss);
+      this.tradingState.attemptNumber += 1;
 
-          const summary = this.generateSummaryOnMaxLoss(sessionProfitLoss);
-          this.bot.sendMessage(this.chatId, summary, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
-              ]
-            }
-          });
+      const message = `
+❌ *Trade Perdedor (Even/Odd)*
 
-          this.resetTradingStateEvenOdd();
-          this.disconnect();
+🎲 Tipo: *${type.toUpperCase()}*
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+🔁 Tentativa: ${this.tradingState.attemptNumber}/${this.tradingState.maxAttempts}
+      `;
 
-          if (this.sessionManager) {
-            this.sessionManager.stopSession(this.chatId);
-          }
+      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
-        } else {
-          const message = `
-❌ *Trade Perdido (Even/Odd)*
+      if (!this.useMartingaleEvenOdd || this.tradingState.attemptNumber >= this.tradingState.maxAttempts) {
+        this.addSessionToHistory(false, profit);
+        const summary = this.generateSummaryOnMaxLoss(profit);
+        this.bot.sendMessage(this.chatId, summary, { parse_mode: 'Markdown' });
+        this.disconnect();
 
-🔄 Tentando novamente com stake dobrado...
-💵 Próximo Stake: ${this.balance.currency} ${this.calculateStakeEvenOdd().toFixed(2)}
-🔢 Tentativa: ${this.tradingState.attemptNumber + 1}/${this.tradingState.maxAttempts}
-          `;
-
-          this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
-          this.tradingState.contractId = null;
-
-          setTimeout(() => {
-            this.executeEvenOddTrade(this.tradingState.currentSymbol, this.tradingState.currentType, {});
-          }, 1000);
+        if (this.sessionManager) {
+          this.sessionManager.stopSession(this.chatId);
         }
       } else {
-        const message = `
-❌ *Trade Perdido (Even/Odd)*
+        let nextStake = this.tradingState.currentStake * 2;
+        this.tradingState.currentStake = nextStake;
 
-💸 Perda: ${this.balance.currency} ${Math.abs(profit).toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
+        const messageMartingale = `
+🔁 *Martingale Ativo (Even/Odd)*
 
-ℹ️ Martingale desativado - continuando a observar oportunidades...
+🔼 Próxima Stake: ${this.balance.currency} ${nextStake.toFixed(2)}
+📊 Tentativa: ${this.tradingState.attemptNumber + 1}/${this.tradingState.maxAttempts}
         `;
 
-        this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-        this.resetTradingStateEvenOdd();
+        this.bot.sendMessage(this.chatId, messageMartingale, { parse_mode: 'Markdown' });
+
+        this.tradingState.isActive = false;
+        if (this.isConnected &&
+            !this.digitDifferState.isActive &&
+            !this.underOverState.isActive &&
+            !this.digitHunterTradeState.isActive &&
+            !this.hardTestState?.trade?.isActive) {
+          this.notifySearchingStart();
+        }
       }
     }
+
+    this.tradingState.isActive = false;
+    this.tradingState.contractId = null;
   }
 
   resetTradingStateEvenOdd() {
-    console.log(`[${this.chatId}] Resetando estado Even/Odd`);
-
     if (this.tradingState.timeoutId) {
       clearTimeout(this.tradingState.timeoutId);
+      this.tradingState.timeoutId = null;
     }
 
-    this.tradingState = {
-      isActive: false,
-      currentSymbol: null,
-      currentType: null,
-      attemptNumber: 0,
-      baseStake: this.tradingState.baseStake || 0,
-      currentStake: 0,
-      maxAttempts: this.maxLosses,
-      contractId: null,
-      sessionTrades: [],
-      timeoutId: null
-    };
+    this.tradingState.isActive = false;
+    this.tradingState.currentSymbol = null;
+    this.tradingState.currentType = null;
+    this.tradingState.attemptNumber = 0;
+    this.tradingState.baseStake = 0;
+    this.tradingState.currentStake = 0;
+    this.tradingState.contractId = null;
 
     if (this.isConnected &&
         !this.digitDifferState.isActive &&
         !this.underOverState.isActive &&
-        !this.digitHunterTradeState.isActive) {
+        !this.digitHunterTradeState.isActive &&
+        !this.hardTestState?.trade?.isActive) {
       this.notifySearchingStart();
     }
   }
 
-  // --------- DIGIT DIFFERS (DEFAULT) ---------
+  // ======================================================
+  // DIGIT DIFFERS
+  // ======================================================
   analyzePatternDigitDiffer(symbol) {
     const history = this.digitHistory[symbol];
-
-    if (history.length < 10) {
+    if (history.length < 5) {
       return { isOpportunity: false };
     }
 
-    const last10 = history.slice(-10);
-    const last4OfLast10 = last10.slice(-4);
+    const last5 = history.slice(-5);
+    const counts = {};
+    last5.forEach(d => {
+      counts[d] = (counts[d] || 0) + 1;
+    });
 
-    if (last4OfLast10[0] === last4OfLast10[1] &&
-        last4OfLast10[1] === last4OfLast10[2] &&
-        last4OfLast10[2] === last4OfLast10[3]) {
-      const digit = last4OfLast10[3];
-      return {
-        isOpportunity: true,
-        predictionDigit: digit,
-        repetitionCount: 4,
-        sequence: last10.join(',')
-      };
+    const overRepeated = Object.entries(counts)
+      .filter(([digit, count]) => count >= 4)
+      .map(([digit]) => digit);
+
+    if (overRepeated.length === 0) {
+      return { isOpportunity: false };
     }
 
-    return { isOpportunity: false };
+    const repeatedDigit = parseInt(overRepeated[0], 10);
+    const predictionDigit = (repeatedDigit + 1) % 10;
+
+    return {
+      isOpportunity: true,
+      repeatedDigit,
+      predictionDigit
+    };
   }
 
-  executeDigitDifferTrade(symbol, predictionDigit, patternInfo) {
+  executeDigitDifferTrade(symbol, predictionDigit, pattern) {
     if (!this.isConnected) return;
-    if (this.strategyMode !== 'standard') return;
 
     this.notifySearchingStop();
-
-    let stake = this.balance.current * 0.05;
-    if (stake < 0.5) stake = 0.5;
-    stake = Math.round(stake * 100) / 100;
 
     this.digitDifferState.isActive = true;
     this.digitDifferState.currentSymbol = symbol;
     this.digitDifferState.predictionDigit = predictionDigit;
+
+    const stake = 0.35;
     this.digitDifferState.stake = stake;
 
     const message = `
-🎯 *Oportunidade Detectada (Digit Differs)!*
+🎯 *Entrada Encontrada (Digit Differs)*
 
 📊 Ativo: ${this.symbols[symbol].name}
-🔢 Sequência: ${patternInfo.sequence}
-🎲 Últimos 4 dígitos: *${predictionDigit}, ${predictionDigit}, ${predictionDigit}, ${predictionDigit}*
-💰 Entrada: *DIGITDIFF* (diferente de ${predictionDigit})
-💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+🔢 Dígitos recentes: ${this.digitHistory[symbol].slice(-5).join(' ')}
+🔁 Dígito repetido: ${pattern.repeatedDigit}
+🎯 Previsão (diferente de): ${predictionDigit}
+💵 Entrada: ${this.balance.currency} ${stake.toFixed(2)}
     `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
     const proposal = {
       proposal: 1,
-      amount: this.digitDifferState.stake,
+      amount: stake,
       basis: 'stake',
       contract_type: 'DIGITDIFF',
       currency: this.balance.currency,
       duration: 1,
       duration_unit: 't',
       symbol: symbol,
-      barrier: predictionDigit
+      barrier: String(predictionDigit)
     };
 
     this.ws.send(JSON.stringify(proposal));
   }
 
   handleDigitDifferResult(isWin, profit) {
-    console.log(
-      `[${this.chatId}] handleDigitDifferResult - isWin: ${isWin}, profit: ${profit}`
-    );
+    const stake = this.digitDifferState.stake;
+    const predictionDigit = this.digitDifferState.predictionDigit;
 
     const message = isWin
       ? `
-✅ *Trade Vencedor (Digit Differs)!*
+✅ *Trade Vencedor (Digit Differs)*
 
-💰 Lucro: ${this.balance.currency} ${profit.toFixed(2)}
+🎯 Previsão (diferente de): ${predictionDigit}
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-      `
+    `
       : `
-❌ *Trade Perdido (Digit Differs)*
+❌ *Trade Perdedor (Digit Differs)*
 
-💸 Perda: ${this.balance.currency} ${Math.abs(profit).toFixed(2)}
+🎯 Previsão (diferente de): ${predictionDigit}
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-      `;
+    `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
     this.resetDigitDifferState();
   }
 
   resetDigitDifferState() {
-    console.log(`[${this.chatId}] Resetando estado Digit Differs`);
-
     if (this.digitDifferState.timeoutId) {
       clearTimeout(this.digitDifferState.timeoutId);
+      this.digitDifferState.timeoutId = null;
     }
 
-    this.digitDifferState = {
-      isActive: false,
-      currentSymbol: null,
-      predictionDigit: null,
-      stake: 0,
-      contractId: null,
-      timeoutId: null
-    };
+    this.digitDifferState.isActive = false;
+    this.digitDifferState.currentSymbol = null;
+    this.digitDifferState.predictionDigit = null;
+    this.digitDifferState.stake = 0;
+    this.digitDifferState.contractId = null;
 
     if (this.isConnected &&
         !this.tradingState.isActive &&
         !this.underOverState.isActive &&
-        !this.digitHunterTradeState.isActive) {
+        !this.digitHunterTradeState.isActive &&
+        !this.hardTestState?.trade?.isActive) {
       this.notifySearchingStart();
     }
   }
 
-  // --------- UNDER/OVER (DEFAULT) ---------
+  // ======================================================
+  // UNDER / OVER
+  // ======================================================
   analyzePatternUnderOver(symbol) {
     const history = this.digitHistory[symbol];
-
     if (history.length < 10) {
       return { isOpportunity: false };
     }
 
-    const last10 = history.slice(-10);
-    const allAbove6 = last10.every(digit => parseInt(digit) > 6);
+    const last10 = history.slice(-10).map(d => parseInt(d, 10));
+    const high = last10.filter(d => d >= 5).length;
+    const low = 10 - high;
 
-    if (allAbove6) {
+    if (high === 10) {
       return {
         isOpportunity: true,
-        sequence: last10.join(',')
+        type: 'under'
+      };
+    } else if (low === 10) {
+      return {
+        isOpportunity: true,
+        type: 'over'
       };
     }
 
     return { isOpportunity: false };
   }
 
-  executeUnderOverTrade(symbol, patternInfo) {
+  executeUnderOverTrade(symbol, pattern) {
     if (!this.isConnected) return;
-    if (this.strategyMode !== 'standard') return;
 
     this.notifySearchingStop();
 
-    let stake = this.balance.current * 0.01;
-    if (stake < 0.5) stake = 0.5;
-    stake = Math.round(stake * 100) / 100;
-
     this.underOverState.isActive = true;
     this.underOverState.currentSymbol = symbol;
+
+    const stake = 0.35;
     this.underOverState.stake = stake;
 
     const message = `
-🎯 *Oportunidade Detectada (Under/Over)!*
+🎯 *Entrada Encontrada (Under/Over)*
 
 📊 Ativo: ${this.symbols[symbol].name}
-🔢 Sequência: ${patternInfo.sequence}
-📉 Todos os 10 dígitos > 6 (7, 8, 9)
-💰 Entrada: *DIGITUNDER 7*
-💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+🔢 Últimos 10 dígitos: ${this.digitHistory[symbol].slice(-10).join(' ')}
+🎲 Tipo: *${pattern.type.toUpperCase()}*
+💵 Entrada: ${this.balance.currency} ${stake.toFixed(2)}
     `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
+    const contractType = pattern.type === 'under' ? 'DIGITUNDER' : 'DIGITOVER';
+    const barrier = pattern.type === 'under' ? '5' : '4';
+
     const proposal = {
       proposal: 1,
-      amount: this.underOverState.stake,
+      amount: stake,
       basis: 'stake',
-      contract_type: 'DIGITUNDER',
+      contract_type: contractType,
       currency: this.balance.currency,
       duration: 1,
       duration_unit: 't',
       symbol: symbol,
-      barrier: '7'
+      barrier: barrier
     };
 
     this.ws.send(JSON.stringify(proposal));
   }
 
   handleUnderOverResult(isWin, profit) {
-    console.log(
-      `[${this.chatId}] handleUnderOverResult - isWin: ${isWin}, profit: ${profit}`
-    );
+    const stake = this.underOverState.stake;
 
     const message = isWin
       ? `
-✅ *Trade Vencedor (Under/Over)!*
+✅ *Trade Vencedor (Under/Over)*
 
-💰 Lucro: ${this.balance.currency} ${profit.toFixed(2)}
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-      `
+    `
       : `
-❌ *Trade Perdido (Under/Over)*
+❌ *Trade Perdedor (Under/Over)*
 
-💸 Perda: ${this.balance.currency} ${Math.abs(profit).toFixed(2)}
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-      `;
+    `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
     this.resetUnderOverState();
   }
 
   resetUnderOverState() {
-    console.log(`[${this.chatId}] Resetando estado Under/Over`);
-
     if (this.underOverState.timeoutId) {
       clearTimeout(this.underOverState.timeoutId);
+      this.underOverState.timeoutId = null;
     }
 
-    this.underOverState = {
-      isActive: false,
-      currentSymbol: null,
-      stake: 0,
-      contractId: null,
-      timeoutId: null
-    };
+    this.underOverState.isActive = false;
+    this.underOverState.currentSymbol = null;
+    this.underOverState.stake = 0;
+    this.underOverState.contractId = null;
 
     if (this.isConnected &&
         !this.tradingState.isActive &&
         !this.digitDifferState.isActive &&
-        !this.digitHunterTradeState.isActive) {
+        !this.digitHunterTradeState.isActive &&
+        !this.hardTestState?.trade?.isActive) {
       this.notifySearchingStart();
     }
   }
 
-  // ============ DIGITHUNTER (4x mesmo dígito -> DIGITMATCH com recover 1.13x) ============
-
+  // ======================================================
+  // DIGITHUNTER
+  // ======================================================
   analyzePatternDigitHunter(symbol) {
     const history = this.digitHistory[symbol];
-
     if (history.length < 4) {
       return { isOpportunity: false };
     }
 
     const last4 = history.slice(-4);
+    const allSame = last4.every(d => d === last4[0]);
 
-    if (last4[0] === last4[1] &&
-        last4[1] === last4[2] &&
-        last4[2] === last4[3]) {
-      const digit = last4[3];
-      return {
-        isOpportunity: true,
-        predictionDigit: digit,
-        sequence: last4.join(',')
-      };
+    if (!allSame) {
+      return { isOpportunity: false };
     }
 
-    return { isOpportunity: false };
+    const digit = parseInt(last4[0], 10);
+
+    return {
+      isOpportunity: true,
+      symbol,
+      predictionDigit: digit
+    };
   }
 
-  executeDigitHunterTrade(symbol, predictionDigit, patternInfo) {
-    if (!this.isConnected) return;
-    if (this.strategyMode !== 'digithunter') return;
+  executeDigitHunterTrade(symbol, predictionDigit, pattern) {
+    if (!this.isConnected || !this.digitHunterState) return;
 
     this.notifySearchingStop();
-
-    const stake = this.digitHunterState
-      ? this.digitHunterState.currentStake
-      : 1.0;
 
     this.digitHunterTradeState.isActive = true;
     this.digitHunterTradeState.currentSymbol = symbol;
     this.digitHunterTradeState.predictionDigit = predictionDigit;
+
+    const stake = this.digitHunterState.currentStake;
     this.digitHunterTradeState.stake = stake;
 
-    if (this.digitHunterState) {
-      this.digitHunterState.targetDigit = predictionDigit;
-      this.digitHunterState.lastSymbol = symbol;
-    }
-
-    const isSequence = patternInfo.isSequence || false;
-
-    const message = isSequence
-      ? `
-🔄 *Entrada em Sequência (DigitHunter)*
+    const message = `
+🎯 *Entrada DigitHunter*
 
 📊 Ativo: ${this.symbols[symbol].name}
-🎯 Dígito Alvo: *${predictionDigit}*
-💰 Entrada: *DIGITMATCH ${predictionDigit}*
-💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
-📌 Recuperação ativa (fator 1.13x)
-      `
-      : `
-🎯 *Oportunidade Detectada (DigitHunter)!*
-
-📊 Ativo: ${this.symbols[symbol].name}
-🔢 Sequência: ${patternInfo.sequence}
-🎯 Dígito Alvo: *${predictionDigit}* (4x seguidas)
-💰 Entrada: *DIGITMATCH ${predictionDigit}*
-💵 Stake Inicial: ${this.balance.currency} ${stake.toFixed(2)}
-📌 Estratégia DigitHunter (recuperação 1.13x)
-      `;
+🔁 Últimos 4 dígitos iguais: ${predictionDigit}${predictionDigit}${predictionDigit}${predictionDigit}
+🎯 Previsão: *DIGITMATCH ${predictionDigit}*
+💵 Entrada: ${this.balance.currency} ${stake.toFixed(2)}
+    `;
 
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
@@ -1184,99 +1048,280 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     };
 
     this.ws.send(JSON.stringify(proposal));
+
+    this.digitHunterState.inSequence = pattern.isSequence || false;
+    this.digitHunterState.lastSymbol = symbol;
+    this.digitHunterState.targetDigit = predictionDigit;
   }
 
   handleDigitHunterResult(isWin, profit) {
-    console.log(
-      `[${this.chatId}] handleDigitHunterResult - isWin: ${isWin}, profit: ${profit}`
-    );
-
-    const stake = this.digitHunterTradeState.stake;
-    const digit = this.digitHunterTradeState.predictionDigit;
-
     if (!this.digitHunterState) {
-      // fallback de segurança
       this.resetDigitHunterTradeState();
       this.notifySearchingStart();
       return;
     }
 
-    this.digitHunterState.sessionTrades.push({
-      stake,
-      profit,
-      isWin
-    });
+    const stake = this.digitHunterTradeState.stake;
+    const digit = this.digitHunterTradeState.predictionDigit;
 
+    this.digitHunterState.sessionTrades.push({
+      isWin,
+      profit
+    });
     this.digitHunterState.sessionProfit += profit;
-    const sessionProfit = this.digitHunterState.sessionProfit;
 
     if (isWin) {
-      // Em DigitHunter, ao acertar, encerra a sessão DigitHunter e volta stake ao inicial
-      this.addSessionToHistory(sessionProfit >= 0, sessionProfit);
-
-      const message = `
-✅ *Trade Vencedor (DigitHunter)!*
-
-🎯 Dígito: *${digit}*
-💰 Lucro da Sessão DigitHunter: ${this.balance.currency} ${sessionProfit.toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-
-📌 Sessão DigitHunter encerrada.
-🔁 Próxima sessão iniciará com stake inicial ${this.balance.currency} ${this.digitHunterState.initialStake.toFixed(2)}.
-      `;
-
-      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
       this.digitHunterState.currentStake = this.digitHunterState.initialStake;
       this.digitHunterState.inSequence = false;
-      this.digitHunterState.targetDigit = null;
       this.digitHunterState.lastSymbol = null;
-      this.digitHunterState.sessionProfit = 0;
-      this.digitHunterState.sessionTrades = [];
-
-      this.resetDigitHunterTradeState();
-
-    } else {
-      // LOSS -> insiste em matches com fator 1.13x
-      const nextStakeRaw = this.digitHunterState.currentStake * 1.13;
-      const nextStake = Math.round(nextStakeRaw * 100) / 100;
-      this.digitHunterState.currentStake = nextStake;
-      this.digitHunterState.inSequence = true;
+      this.digitHunterState.targetDigit = null;
 
       const message = `
-❌ *Trade Perdido (DigitHunter)*
+✅ *Trade Vencedor (DigitHunter)*
 
 🎯 Dígito: *${digit}*
-💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💰 Lucro da Sessão DigitHunter: ${this.balance.currency} ${sessionProfit.toFixed(2)}
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta: ${this.goalPercentage}%
-
-➡️ Próxima stake (fator 1.13x): ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ Continuando DigitMATCH no mesmo dígito até acertar.
+📊 Lucro da Sessão DigitHunter: ${this.balance.currency} ${this.digitHunterState.sessionProfit.toFixed(2)}
       `;
 
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
-      this.resetDigitHunterTradeState();
+      const summary = this.generateSummary();
+      this.bot.sendMessage(this.chatId, summary, { parse_mode: 'Markdown' });
 
-      // Próxima entrada será feita pelo handleTick, pois inSequence = true
+      this.disconnect();
+
+      if (this.sessionManager) {
+        this.sessionManager.stopSession(this.chatId);
+      }
+
+    } else {
+      let nextStake = this.digitHunterState.currentStake * 1.12;
+      nextStake = Math.round(nextStake * 100) / 100;
+      this.digitHunterState.currentStake = nextStake;
+
+      const message = `
+❌ *Trade Perdedor (DigitHunter)*
+
+🎯 Dígito: *${digit}*
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+
+🔁 *Recuperação DigitHunter*
+➡️ Próxima stake (1.12x): ${this.balance.currency} ${nextStake.toFixed(2)}
+      `;
+
+      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+      this.digitHunterState.inSequence = true;
     }
+
+    this.resetDigitHunterTradeState();
   }
 
   resetDigitHunterTradeState() {
-    console.log(`[${this.chatId}] Resetando estado DigitHunter (trade)`);
-
     if (this.digitHunterTradeState.timeoutId) {
       clearTimeout(this.digitHunterTradeState.timeoutId);
+      this.digitHunterTradeState.timeoutId = null;
     }
 
-    this.digitHunterTradeState = {
+    this.digitHunterTradeState.isActive = false;
+    this.digitHunterTradeState.currentSymbol = null;
+    this.digitHunterTradeState.predictionDigit = null;
+    this.digitHunterTradeState.stake = 0;
+    this.digitHunterTradeState.contractId = null;
+
+    if (this.isConnected &&
+        !this.tradingState.isActive &&
+        !this.digitDifferState.isActive &&
+        !this.underOverState.isActive &&
+        !this.hardTestState?.trade?.isActive) {
+      this.notifySearchingStart();
+    }
+  }
+
+  // ======================================================
+  // HARDTEST
+  // ======================================================
+  initHardTestSession() {
+    if (!this.hardTestState) return;
+
+    this.hardTestState.baseBalanceForSession = this.balance.current;
+
+    // 0.5% da conta
+    let stake = this.balance.current * 0.005;
+    if (stake < 0.35) stake = 0.35;
+    stake = Math.round(stake * 100) / 100;
+
+    this.hardTestState.baseStake = stake;
+    this.hardTestState.currentStake = stake;
+    this.hardTestState.profitInSession = 0;
+    this.hardTestState.lossesInARow = 0;
+
+    this.bot.sendMessage(this.chatId, `
+🧪 *Nova Sessão HardTest Iniciada*
+
+💰 Saldo base da sessão: ${this.balance.currency} ${this.hardTestState.baseBalanceForSession.toFixed(2)}
+💵 Stake base (0.5% / min 0.35): ${this.balance.currency} ${stake.toFixed(2)}
+🎯 Meta interna HardTest: lucro > 10% sobre o saldo base desta sessão
+    `.trim(), { parse_mode: 'Markdown' });
+  }
+
+  executeHardTestTrade(symbol) {
+    if (!this.isConnected || !this.hardTestState) return;
+
+    this.notifySearchingStop();
+
+    const digit = Math.floor(Math.random() * 10); // 0-9
+    const stake = this.hardTestState.currentStake;
+
+    this.hardTestState.trade.isActive = true;
+    this.hardTestState.trade.symbol = symbol;
+    this.hardTestState.trade.predictionDigit = digit;
+    this.hardTestState.trade.stake = stake;
+
+    const message = `
+🧪 *Entrada HardTest*
+
+📊 Ativo: ${this.symbols[symbol].name}
+🎯 Dígito Aleatório: *${digit}*
+💰 Entrada: *DIGITMATCH ${digit}*
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+    `.trim();
+
+    this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+    const proposal = {
+      proposal: 1,
+      amount: stake,
+      basis: 'stake',
+      contract_type: 'DIGITMATCH',
+      currency: this.balance.currency,
+      duration: 1,
+      duration_unit: 't',
+      symbol: symbol,
+      barrier: String(digit)
+    };
+
+    this.ws.send(JSON.stringify(proposal));
+  }
+
+  handleHardTestResult(isWin, profit) {
+    if (!this.hardTestState) {
+      this.resetHardTestTradeState();
+      this.notifySearchingStart();
+      return;
+    }
+
+    const stake = this.hardTestState.trade.stake;
+    const digit = this.hardTestState.trade.predictionDigit;
+
+    this.hardTestState.profitInSession += profit;
+
+    if (isWin) {
+      this.hardTestState.lossesInARow = 0;
+      this.hardTestState.currentStake = this.hardTestState.baseStake;
+
+      const growthSession = this.hardTestState.baseBalanceForSession > 0
+        ? (this.hardTestState.profitInSession / this.hardTestState.baseBalanceForSession) * 100
+        : 0;
+
+      const message = `
+✅ *Trade Vencedor (HardTest)*
+
+🎯 Dígito: *${digit}*
+💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
+💰 Lucro da Sessão HardTest: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+      `.trim();
+
+      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+      if (growthSession >= 10) {
+        this.hardTestState.winSessions += 1;
+
+        this.bot.sendMessage(this.chatId, `
+🎉 *Sessão HardTest Vitoriosa!*
+
+📈 Lucro da sessão: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
+📊 Sessões HardTest:
+  ✅ Vitórias: ${this.hardTestState.winSessions}
+  ❌ Derrotas: ${this.hardTestState.lossSessions}
+
+🔁 Reiniciando automaticamente com novo cálculo de 0.5% do saldo...
+        `.trim(), { parse_mode: 'Markdown' });
+
+        this.initHardTestSession();
+      }
+
+      this.resetHardTestTradeState();
+      return;
+    }
+
+    // Loss
+    this.hardTestState.lossesInARow += 1;
+
+    const growthSession = this.hardTestState.baseBalanceForSession > 0
+      ? (this.hardTestState.profitInSession / this.hardTestState.baseBalanceForSession) * 100
+      : 0;
+
+    const message = `
+❌ *Trade Perdedor (HardTest)*
+
+🎯 Dígito: *${digit}*
+💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
+💰 Lucro da Sessão HardTest: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📉 Perdas consecutivas: ${this.hardTestState.lossesInARow}/20
+    `.trim();
+
+    this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+    if (this.hardTestState.lossesInARow >= 20) {
+      this.hardTestState.lossSessions += 1;
+
+      this.bot.sendMessage(this.chatId, `
+🛑 *Sessão HardTest Encerrada por 20 Losses Consecutivos*
+
+💰 Resultado da sessão: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
+📊 Sessões HardTest:
+  ✅ Vitórias: ${this.hardTestState.winSessions}
+  ❌ Derrotas: ${this.hardTestState.lossSessions}
+
+🔁 Reiniciando automaticamente com novo cálculo de 0.5% do saldo...
+      `.trim(), { parse_mode: 'Markdown' });
+
+      this.initHardTestSession();
+
+    } else {
+      // Fator de recuperação 1.13x
+      let nextStake = this.hardTestState.currentStake * 1.13;
+      nextStake = Math.round(nextStake * 100) / 100;
+      this.hardTestState.currentStake = nextStake;
+
+      this.bot.sendMessage(this.chatId, `
+↗️ *Recuperação HardTest*
+
+➡️ Próxima stake (1.13x): ${this.balance.currency} ${nextStake.toFixed(2)}
+      `.trim(), { parse_mode: 'Markdown' });
+    }
+
+    this.resetHardTestTradeState();
+  }
+
+  resetHardTestTradeState() {
+    if (!this.hardTestState) return;
+
+    if (this.hardTestState.trade.timeoutId) {
+      clearTimeout(this.hardTestState.trade.timeoutId);
+    }
+
+    this.hardTestState.trade = {
       isActive: false,
-      currentSymbol: null,
+      symbol: null,
       predictionDigit: null,
       stake: 0,
       contractId: null,
@@ -1287,12 +1332,14 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
         !this.tradingState.isActive &&
         !this.digitDifferState.isActive &&
         !this.underOverState.isActive &&
-        (!this.digitHunterState || !this.digitHunterState.inSequence)) {
+        !this.digitHunterTradeState.isActive) {
       this.notifySearchingStart();
     }
   }
 
-  // --------- HELPERS PARA ANIMAÇÃO DE BUSCA ---------
+  // ======================================================
+  // STATUS / RESUMOS / UTILS
+  // ======================================================
   notifySearchingStop() {
     if (this.sessionManager && typeof this.sessionManager.stopSearchingAnimation === 'function') {
       this.sessionManager.stopSearchingAnimation(this.chatId);
@@ -1305,7 +1352,6 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     }
   }
 
-  // --------- FUNÇÕES COMUNS ---------
   addSessionToHistory(isWin, profitLoss) {
     this.sessionHistory.push({
       timestamp: new Date().toISOString(),
@@ -1324,7 +1370,12 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
+            [
+              {
+                text: '⚙️ Voltar para Configurações',
+                callback_data: 'back_to_config'
+              }
+            ]
           ]
         }
       });
@@ -1340,14 +1391,18 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     if (!this.maxGlobalLoss) return;
 
     const growth = this.getGrowthPercentage();
-
     if (growth <= -Math.abs(this.maxGlobalLoss)) {
       const summary = this.generateSummaryOnGlobalLoss();
       this.bot.sendMessage(this.chatId, summary, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '⚙️ Voltar para Configurações', callback_data: 'back_to_config' }]
+            [
+              {
+                text: '⚙️ Voltar para Configurações',
+                callback_data: 'back_to_config'
+              }
+            ]
           ]
         }
       });
@@ -1361,20 +1416,49 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 
   getGrowthPercentage() {
     if (this.balance.initial === 0) return 0;
-    return ((this.balance.current - this.balance.initial) / this.balance.initial) * 100;
+    return (
+      ((this.balance.current - this.balance.initial) / this.balance.initial) *
+      100
+    );
+  }
+
+  getExecutionTime() {
+    const elapsed = Date.now() - this.startTime;
+    const hours = Math.floor(elapsed / 3600000);
+    const minutes = Math.floor((elapsed % 3600000) / 60000);
+    const seconds = Math.floor((elapsed % 60000) / 1000);
+    return (
+      String(hours).padStart(2, '0') +
+      ':' +
+      String(minutes).padStart(2, '0') +
+      ':' +
+      String(seconds).padStart(2, '0')
+    );
   }
 
   generateSummary() {
     const profit = this.balance.current - this.balance.initial;
     const growth = this.getGrowthPercentage();
     const executionTime = this.getExecutionTime();
+
     const winSessions = this.sessionHistory.filter(s => s.result === 'WIN').length;
     const totalSessions = this.sessionHistory.length;
-    const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+    const winRate =
+      totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
 
     let modeLabel = 'Default';
     if (this.strategyMode === 'ppcp') modeLabel = 'PPCP';
     if (this.strategyMode === 'digithunter') modeLabel = 'DigitHunter';
+    if (this.strategyMode === 'hardtest') modeLabel = 'HardTest';
+
+    let hardTestExtra = '';
+    if (this.strategyMode === 'hardtest' && this.hardTestState) {
+      hardTestExtra = `
+📊 *Sessões HardTest Internas:*
+✅ Vitórias: ${this.hardTestState.winSessions}
+❌ Derrotas: ${this.hardTestState.lossSessions}
+      `;
+    }
 
     return `
 🎉 *META ATINGIDA! (${modeLabel})*
@@ -1386,10 +1470,11 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🎯 *Meta:* ${this.goalPercentage}%
 
-📋 *Total de Sessões:* ${totalSessions}
+📋 *Total de Sessões (globais):* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
+${hardTestExtra}
 
 ✨ Sessão encerrada automaticamente!
     `;
@@ -1399,9 +1484,20 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     const profit = this.balance.current - this.balance.initial;
     const growth = this.getGrowthPercentage();
     const executionTime = this.getExecutionTime();
+
     const winSessions = this.sessionHistory.filter(s => s.result === 'WIN').length;
     const totalSessions = this.sessionHistory.length;
-    const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+    const winRate =
+      totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+
+    let hardTestExtra = '';
+    if (this.strategyMode === 'hardtest' && this.hardTestState) {
+      hardTestExtra = `
+📊 *Sessões HardTest Internas:*
+✅ Vitórias: ${this.hardTestState.winSessions}
+❌ Derrotas: ${this.hardTestState.lossSessions}
+      `;
+    }
 
     return `
 🛑 *Sessão Encerrada por Máximo de Loss*
@@ -1413,10 +1509,11 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📊 *Crescimento:* ${growth.toFixed(2)}%
 ❌ *Última Sessão:* ${this.balance.currency} ${sessionProfitLoss.toFixed(2)}
 
-📋 *Total de Sessões:* ${totalSessions}
+📋 *Total de Sessões (globais):* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
+${hardTestExtra}
 
 ✨ Sessão encerrada automaticamente!
     `;
@@ -1426,9 +1523,20 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     const profit = this.balance.current - this.balance.initial;
     const growth = this.getGrowthPercentage();
     const executionTime = this.getExecutionTime();
+
     const winSessions = this.sessionHistory.filter(s => s.result === 'WIN').length;
     const totalSessions = this.sessionHistory.length;
-    const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+    const winRate =
+      totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+
+    let hardTestExtra = '';
+    if (this.strategyMode === 'hardtest' && this.hardTestState) {
+      hardTestExtra = `
+📊 *Sessões HardTest Internas:*
+✅ Vitórias: ${this.hardTestState.winSessions}
+❌ Derrotas: ${this.hardTestState.lossSessions}
+      `;
+    }
 
     return `
 🚨 *Sessão Encerrada por Max Loss Global*
@@ -1440,29 +1548,34 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🚨 *Limite Global:* -${Math.abs(this.maxGlobalLoss)}%
 
-📋 *Total de Sessões:* ${totalSessions}
+📋 *Total de Sessões (globais):* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
+${hardTestExtra}
 
 ✨ Sessão encerrada automaticamente!
     `;
   }
 
-  getExecutionTime() {
-    const elapsed = Date.now() - this.startTime;
-    const hours = Math.floor(elapsed / 3600000);
-    const minutes = Math.floor((elapsed % 3600000) / 60000);
-    const seconds = Math.floor((elapsed % 60000) / 1000);
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
   getStatus() {
     const profit = this.balance.current - this.balance.initial;
     const growth = this.getGrowthPercentage();
+
     const winSessions = this.sessionHistory.filter(s => s.result === 'WIN').length;
     const totalSessions = this.sessionHistory.length;
-    const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+    const winRate =
+      totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+
+    let hardTestStateForStatus = null;
+    if (this.strategyMode === 'hardtest' && this.hardTestState) {
+      hardTestStateForStatus = {
+        baseStake: this.hardTestState.baseStake,
+        currentStake: this.hardTestState.currentStake,
+        winSessions: this.hardTestState.winSessions,
+        lossSessions: this.hardTestState.lossSessions
+      };
+    }
 
     return {
       executionTime: this.getExecutionTime(),
@@ -1481,29 +1594,30 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
         this.tradingState.isActive ||
         this.digitDifferState.isActive ||
         this.underOverState.isActive ||
-        this.digitHunterTradeState.isActive,
+        this.digitHunterTradeState.isActive ||
+        (this.hardTestState?.trade?.isActive ?? false),
       useDigitDifferStrategy: this.useDigitDifferStrategy,
       useUnderOverStrategy: this.useUnderOverStrategy,
       useMartingaleEvenOdd: this.useMartingaleEvenOdd,
       strategyMode: this.strategyMode,
       ppcpState: this.ppcpState,
-      digitHunterState: this.digitHunterState
+      digitHunterState: this.digitHunterState,
+      hardTestState: hardTestStateForStatus
     };
   }
 
   disconnect() {
-    if (this.tradingState.timeoutId) {
-      clearTimeout(this.tradingState.timeoutId);
-    }
-    if (this.digitDifferState.timeoutId) {
-      clearTimeout(this.digitDifferState.timeoutId);
-    }
-    if (this.underOverState.timeoutId) {
-      clearTimeout(this.underOverState.timeoutId);
-    }
-    if (this.digitHunterTradeState.timeoutId) {
-      clearTimeout(this.digitHunterTradeState.timeoutId);
-    }
+    if (this.tradingState.timeoutId) clearTimeout(this.tradingState.timeoutId);
+    if (this.digitDifferState.timeoutId) clearTimeout(this.digitDifferState.timeoutId);
+    if (this.underOverState.timeoutId) clearTimeout(this.underOverState.timeoutId);
+    if (this.digitHunterTradeState.timeoutId) clearTimeout(this.digitHunterTradeState.timeoutId);
+    if (this.hardTestState?.trade?.timeoutId) clearTimeout(this.hardTestState.trade.timeoutId);
+
+    this.tradingState.timeoutId = null;
+    this.digitDifferState.timeoutId = null;
+    this.underOverState.timeoutId = null;
+    this.digitHunterTradeState.timeoutId = null;
+    if (this.hardTestState?.trade) this.hardTestState.trade.timeoutId = null;
 
     if (this.ws) {
       this.ws.close();
