@@ -43,12 +43,64 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
 
     this.bot.onText(/\/stop/, (msg) => {
       const chatId = msg.chat.id;
-      this.sessionManager.stopSession(chatId);
+      
+      if (this.sessionManager.hasActiveSession(chatId)) {
+        this.sessionManager.stopSession(chatId);
+        this.bot.sendMessage(chatId, '🛑 *Sessão encerrada com sucesso!*', { parse_mode: 'Markdown' });
+      } else {
+        this.bot.sendMessage(chatId, '❌ Nenhuma sessão ativa no momento.');
+      }
     });
 
     this.bot.onText(/\/status/, (msg) => {
       const chatId = msg.chat.id;
-      this.sessionManager.showStatus(chatId);
+      const status = this.sessionManager.getStatus(chatId);
+
+      if (!status) {
+        this.bot.sendMessage(chatId, '❌ Nenhuma sessão ativa. Use /session para iniciar.');
+        return;
+      }
+
+      const modeLabel = status.strategyMode === 'ppcp' ? 'PPCP' : 'Default';
+      const globalLossText = status.maxGlobalLoss 
+        ? `\n🚨 *Max Loss Global:* -${Math.abs(status.maxGlobalLoss)}%` 
+        : '';
+
+      let strategyInfo = '';
+      if (status.strategyMode === 'standard') {
+        strategyInfo = `
+🔄 *Martingale:* ${status.useMartingaleEvenOdd ? '✅ Ativo' : '❌ Inativo'}
+🧠 *Digit Differs:* ${status.useDigitDifferStrategy ? '✅ Ativo' : '❌ Inativo'}
+📉 *Under/Over:* ${status.useUnderOverStrategy ? '✅ Ativo' : '❌ Inativo'}`;
+      } else if (status.strategyMode === 'ppcp' && status.ppcpState) {
+        const directionLabel = status.ppcpState.direction === 'favor' ? 'A Favor' : 'Contra';
+        strategyInfo = `
+💵 *Stake Inicial:* ${status.currency} ${status.ppcpState.initialStake.toFixed(2)}
+💰 *Stake Atual:* ${status.currency} ${status.ppcpState.currentStake.toFixed(2)}
+🎲 *Direção:* ${directionLabel}
+🔄 *Em Sequência:* ${status.ppcpState.inSequence ? '✅ Sim' : '❌ Não'}`;
+      }
+
+      const message = `
+📊 *Status da Sessão (${modeLabel})*
+
+⏱ *Tempo:* ${status.executionTime}
+💰 *Saldo Inicial:* ${status.currency} ${status.initialBalance.toFixed(2)}
+💵 *Saldo Atual:* ${status.currency} ${status.currentBalance.toFixed(2)}
+📈 *Lucro/Prejuízo:* ${status.currency} ${status.profit.toFixed(2)}
+📊 *Crescimento:* ${status.growth.toFixed(2)}%
+🎯 *Meta:* ${status.goalPercentage}%${globalLossText}
+
+📋 *Sessões:* ${status.totalSessions}
+✅ *Vitórias:* ${status.winSessions}
+❌ *Derrotas:* ${status.lossSessions}
+📊 *Taxa de Vitória:* ${status.winRate.toFixed(2)}%
+${strategyInfo}
+
+🔄 *Operando:* ${status.isTrading ? '✅ Sim' : '❌ Não'}
+      `;
+
+      this.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
     });
   }
 
@@ -86,6 +138,24 @@ Escolha sua estratégia:
     }
   }
 
+  // ✅ FUNÇÃO AUXILIAR: verifica se config PPCP está completa
+  isPPCPConfigComplete(chatId) {
+    const token = this.userStore.getToken(chatId);
+    const goal = this.userStore.getGoalPercentage(chatId);
+    const stake = this.userStore.getPPCPInitialStake(chatId);
+    const direction = this.userStore.getPPCPDirection(chatId);
+
+    return !!(token && goal && stake && direction);
+  }
+
+  // ✅ FUNÇÃO AUXILIAR: verifica se config Default está completa
+  isStandardConfigComplete(chatId) {
+    const token = this.userStore.getToken(chatId);
+    const goal = this.userStore.getGoalPercentage(chatId);
+
+    return !!(token && goal);
+  }
+
   showPPCPConfigMenu(chatId) {
     const token = this.userStore.getToken(chatId);
     const goalPercentage = this.userStore.getGoalPercentage(chatId);
@@ -119,6 +189,13 @@ Escolha o que deseja configurar:
         [{ text: '🔙 Voltar', callback_data: 'back_to_mode_selection' }]
       ]
     };
+
+    // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
+    if (this.isPPCPConfigComplete(chatId)) {
+      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+        [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
+      );
+    }
 
     this.bot.sendMessage(chatId, message, {
       parse_mode: 'Markdown',
@@ -168,6 +245,13 @@ Escolha o que deseja configurar:
       ]
     };
 
+    // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
+    if (this.isStandardConfigComplete(chatId)) {
+      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+        [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
+      );
+    }
+
     this.bot.sendMessage(chatId, message, {
       parse_mode: 'Markdown',
       reply_markup: keyboard
@@ -178,6 +262,14 @@ Escolha o que deseja configurar:
     this.bot.on('callback_query', (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
+
+      // ✅ CALLBACK PARA INICIAR SESSÃO
+      if (data === 'start_session') {
+        this.bot.answerCallbackQuery(query.id);
+        this.bot.deleteMessage(chatId, query.message.message_id);
+        this.sessionManager.startSession(chatId);
+        return;
+      }
 
       // Seleção de modo
       if (data === 'mode_standard') {

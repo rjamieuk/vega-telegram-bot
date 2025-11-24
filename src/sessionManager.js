@@ -5,7 +5,7 @@ export class SessionManager {
     this.bot = bot;
     this.userStore = userStore;
     this.sessions = new Map();
-    this.searchingMessages = new Map(); // Para controlar mensagens de "Buscando..."
+    this.searchingMessages = new Map();
   }
 
   hasActiveSession(chatId) {
@@ -15,14 +15,15 @@ export class SessionManager {
   async startSession(chatId) {
     const user = this.userStore.getUser(chatId);
   
-    if (!user || !user.derivToken) {
+    // ✅ CORRIGIDO: usar "token" ao invés de "derivToken"
+    if (!user || !user.token) {
       this.bot.sendMessage(chatId, '❌ Configuração incompleta. Use /config');
       return;
     }
 
     const strategyMode = user.strategyMode || 'standard';
 
-    // Estratégia padrão (já existente)
+    // ========== ESTRATÉGIA PADRÃO ==========
     if (strategyMode === 'standard') {
       if (!user.goalPercentage) {
         this.bot.sendMessage(chatId, '❌ Você precisa configurar sua meta %.\nUse /config');
@@ -36,7 +37,7 @@ export class SessionManager {
       const useMartingaleEvenOdd = user.useMartingaleEvenOdd !== false;
 
       const client = new DerivClient(
-        user.derivToken,
+        user.token,  // ✅ CORRIGIDO
         user.goalPercentage,
         maxLosses,
         chatId,
@@ -79,14 +80,15 @@ Use /stop para encerrar
       return;
     }
 
-    // Estratégia PPCP
+    // ========== ESTRATÉGIA PPCP ==========
     if (strategyMode === 'ppcp') {
-      const goal = user.ppcpGoalPercentage;
-      const maxGlobalLoss = user.ppcpMaxGlobalLoss ?? null;
+      // ✅ CORRIGIDO: usar os campos corretos do userStore
+      const goal = user.goalPercentage;  // PPCP usa o mesmo campo goalPercentage
+      const maxGlobalLoss = user.maxGlobalLoss ?? null;
       const initialStake = user.ppcpInitialStake;
       const direction = user.ppcpDirection;
 
-      // ✅ VALIDAÇÃO COMPLETA
+      // ✅ Validação completa
       if (!goal || !initialStake || !direction) {
         this.bot.sendMessage(chatId,
           '❌ Configuração PPCP incompleta.\n\n' +
@@ -100,7 +102,7 @@ Use /stop para encerrar
       }
 
       const client = new DerivClient(
-        user.derivToken,
+        user.token,  // ✅ CORRIGIDO
         goal,
         null,
         chatId,
@@ -113,7 +115,7 @@ Use /stop para encerrar
         {
           mode: 'ppcp',
           ppcpInitialStake: initialStake,
-          ppcpDirection: direction  // ✅ PASSANDO A DIREÇÃO
+          ppcpDirection: direction
         }
       );
 
@@ -193,7 +195,7 @@ Use /stop para encerrar
               }
             );
           } catch (e) {
-            // Ignora erros de edição (ex: mensagem não modificada)
+            // Ignora erros de edição
           }
         }, 2000);
 
@@ -247,14 +249,9 @@ Use /stop para encerrar
     this.sessions.clear();
   }
 
-  // Chamado pelo DerivClient sempre que volta a ficar ocioso (sem trade ativo)
   notifyIdle(chatId) {
-    // Se não existir sessão ativa, não faz nada
     if (!this.sessions.has(chatId)) return;
-
-    // Se já há uma animação rodando, não recria
     if (this.searchingMessages.has(chatId)) return;
-
     this.startSearchingAnimation(chatId);
   }
 }
