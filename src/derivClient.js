@@ -35,7 +35,8 @@ export class DerivClient {
         initialStake: options.ppcpInitialStake || 1.0,
         currentStake: options.ppcpInitialStake || 1.0,
         sessionTrades: [],   // trades da "sessão PPCP corrente"
-        sessionProfit: 0     // lucro acumulado desta sessão de recuperação
+        sessionProfit: 0,    // lucro acumulado desta sessão de recuperação
+        inSequence: false    // se está em modo sequência (não aguarda nova oportunidade)
       };
     } else {
       // Modo padrão (como era antes)
@@ -322,6 +323,19 @@ export class DerivClient {
     if (anyTradeActive) {
       return;
     }
+
+    // -------- MODO PPCP: se está em sequência, não precisa aguardar nova oportunidade --------
+    if (this.strategyMode === 'ppcp' && this.ppcpState.inSequence) {
+      // Entra imediatamente no mesmo símbolo e tipo da última operação
+      const lastSymbol = this.tradingState.currentSymbol;
+      const lastType = this.tradingState.currentType;
+
+      if (lastSymbol && lastType) {
+        console.log(`[${this.chatId}] PPCP em sequência: entrando imediatamente em ${lastSymbol} ${lastType}`);
+        this.executeEvenOddTrade(lastSymbol, lastType, { isSequence: true });
+        return;
+      }
+    }
   
     // 1) Oportunidades Even/Odd (sempre usadas em ambos modos)
     const pattern = this.analyzePatternEvenOdd(symbol);
@@ -379,10 +393,10 @@ export class DerivClient {
 
   executeEvenOddTrade(symbol, tradeType, patternInfo) {
     if (!this.isConnected) return;
-
+  
     // parando animação de busca, pois vamos entrar em trade
     this.notifySearchingStop();
-  
+
     // -------- MODO PPCP --------
     if (this.strategyMode === 'ppcp') {
       // stake definida pela lógica de recuperação PPCP
@@ -393,15 +407,26 @@ export class DerivClient {
       this.tradingState.currentType = tradeType;
       this.tradingState.currentStake = stake;
 
-      const message = `
-🎯 *Oportunidade Detectada (Even/Odd) - PPCP!*
+      const isSequence = patternInfo.isSequence || false;
+
+      const message = isSequence
+        ? `
+🔄 *Entrada em Sequência (PPCP)*
+
+📊 Ativo: ${this.symbols[symbol].name}
+💰 Entrada: ${tradeType.toUpperCase()}
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+📌 Modo: Recuperação ativa
+        `
+        : `
+🎯 *Oportunidade Detectada (PPCP)*
 
 📊 Ativo: ${this.symbols[symbol].name}
 🔢 Padrão: 10x ${tradeType === 'even' ? 'ÍMPARES' : 'PARES'}
 💰 Entrada: ${tradeType.toUpperCase()}
-💵 Stake (PPCP): ${this.balance.currency} ${stake.toFixed(2)}
-📌 Modo: *PPCP*
-      `;
+💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
+📌 Modo: PPCP
+        `;
     
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
     
@@ -494,15 +519,15 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           this.addSessionToHistory(true, sessionProfit);
 
           const message = `
-✅ *Trade Vencedor (PPCP Even/Odd)!*
+✅ *Trade Vencedor (PPCP)*
 
-💰 Lucro da Sessão PPCP: ${this.balance.currency} ${sessionProfit.toFixed(2)}
+💰 Lucro da Sessão: ${this.balance.currency} ${sessionProfit.toFixed(2)}
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
-🎯 Meta Global PPCP: ${this.goalPercentage}%
+🎯 Meta: ${this.goalPercentage}%
 
-📌 Sessão PPCP encerrada com sucesso (lucro >= 0.01).
-🔁 Próxima sessão PPCP iniciará com stake inicial ${this.balance.currency} ${this.ppcpState.initialStake.toFixed(2)}.
+📌 Sessão encerrada com sucesso.
+🔁 Próxima sessão iniciará com stake inicial ${this.balance.currency} ${this.ppcpState.initialStake.toFixed(2)}.
           `;
 
           this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
@@ -511,12 +536,14 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           this.ppcpState.currentStake = this.ppcpState.initialStake;
           this.ppcpState.sessionTrades = [];
           this.ppcpState.sessionProfit = 0;
+          this.ppcpState.inSequence = false; // sai do modo sequência
 
           this.resetTradingStateEvenOdd();
         } else {
-          // Win mas lucro da sessão ainda não chegou em 0.01 → stake seguinte = 1.94x
+          // Win mas lucro da sessão ainda não chegou em 0.01 → entra em sequência com stake 1.94x
           const nextStake = Math.round(stake * 1.94 * 100) / 100;
           this.ppcpState.currentStake = nextStake;
+          this.ppcpState.inSequence = true; // ativa modo sequência
 
           const message = `
 ✅ *Trade Vencedor (PPCP)*
@@ -527,16 +554,17 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 🎯 Meta: ${this.goalPercentage}%
 
 ➡️ Próxima stake: ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ Aguardando nova oportunidade para continuar recuperação.
+ℹ️ Entrando em sequência para completar recuperação.
           `;
 
           this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
           this.resetTradingStateEvenOdd();
         }
       } else {
-        // LOSS: próxima stake = 1.5x da anterior, aguardando nova oportunidade
+        // LOSS: entra em sequência com stake 1.5x
         const nextStake = Math.round(stake * 1.5 * 100) / 100;
         this.ppcpState.currentStake = nextStake;
+        this.ppcpState.inSequence = true; // ativa modo sequência
 
         const message = `
 ❌ *Trade Perdido (PPCP)*
@@ -548,7 +576,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 🎯 Meta: ${this.goalPercentage}%
 
 ➡️ Próxima stake: ${this.balance.currency} ${nextStake.toFixed(2)}
-ℹ️ Sistema de recuperação ativo. Aguardando nova oportunidade.
+ℹ️ Sistema de recuperação ativo. Entrando em sequência.
         `;
 
         this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
@@ -889,6 +917,19 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     }
   }
 
+  // --------- HELPERS PARA ANIMAÇÃO DE BUSCA ---------
+  notifySearchingStop() {
+    if (this.sessionManager && typeof this.sessionManager.stopSearchingAnimation === 'function') {
+      this.sessionManager.stopSearchingAnimation(this.chatId);
+    }
+  }
+
+  notifySearchingStart() {
+    if (this.sessionManager && typeof this.sessionManager.notifyIdle === 'function') {
+      this.sessionManager.notifyIdle(this.chatId);
+    }
+  }
+
   // --------- FUNÇÕES COMUNS ---------
   addSessionToHistory(isWin, profitLoss) {
     this.sessionHistory.push({
@@ -956,7 +997,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     const totalSessions = this.sessionHistory.length;
     const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
 
-    const modeLabel = this.strategyMode === 'ppcp' ? 'PPCP' : 'Even/Odd Padrão';
+    const modeLabel = this.strategyMode === 'ppcp' ? 'PPCP' : 'Default';
   
     return `
 🎉 *META ATINGIDA! (${modeLabel})*
@@ -968,7 +1009,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🎯 *Meta:* ${this.goalPercentage}%
 
-📋 *Total de Sessões (Even/Odd):* ${totalSessions}
+📋 *Total de Sessões:* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -986,7 +1027,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
 
     return `
-🛑 *Sessão Encerrada por Máximo de Loss (Even/Odd)*
+🛑 *Sessão Encerrada por Máximo de Loss*
 
 ⏱ *Tempo de Execução:* ${executionTime}
 💰 *Saldo Inicial:* ${this.balance.currency} ${this.balance.initial.toFixed(2)}
@@ -995,7 +1036,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📊 *Crescimento:* ${growth.toFixed(2)}%
 ❌ *Última Sessão:* ${this.balance.currency} ${sessionProfitLoss.toFixed(2)}
 
-📋 *Total de Sessões (Even/Odd):* ${totalSessions}
+📋 *Total de Sessões:* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -1022,7 +1063,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🚨 *Limite Global:* -${Math.abs(this.maxGlobalLoss)}%
 
-📋 *Total de Sessões (Even/Odd):* ${totalSessions}
+📋 *Total de Sessões:* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -1084,16 +1125,5 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       this.ws = null;
     }
     this.isConnected = false;
-  }
-  notifySearchingStop() {
-    if (this.sessionManager && typeof this.sessionManager.stopSearchingAnimation === 'function') {
-      this.sessionManager.stopSearchingAnimation(this.chatId);
-    }
-  }
-
-  notifySearchingStart() {
-    if (this.sessionManager && typeof this.sessionManager.notifyIdle === 'function') {
-      this.sessionManager.notifyIdle(this.chatId);
-    }
   }
 }
