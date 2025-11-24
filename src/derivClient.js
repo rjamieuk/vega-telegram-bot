@@ -1,17 +1,49 @@
 import WebSocket from 'ws';
 
 export class DerivClient {
-  constructor(token, goalPercentage, maxLosses, chatId, bot, useDigitDifferStrategy = false, useUnderOverStrategy = false, useMartingaleEvenOdd = true, maxGlobalLoss = null, sessionManager = null) {
+  constructor(
+    token,
+    goalPercentage,
+    maxLosses,
+    chatId,
+    bot,
+    useDigitDifferStrategy = false,
+    useUnderOverStrategy = false,
+    useMartingaleEvenOdd = true,
+    maxGlobalLoss = null,
+    sessionManager = null,
+    options = {}
+  ) {
     this.token = token;
     this.goalPercentage = goalPercentage;
     this.maxLosses = maxLosses ?? 6;
     this.maxGlobalLoss = maxGlobalLoss;
     this.chatId = chatId;
     this.bot = bot;
-    this.useDigitDifferStrategy = useDigitDifferStrategy;
-    this.useUnderOverStrategy = useUnderOverStrategy;
-    this.useMartingaleEvenOdd = useMartingaleEvenOdd;
     this.sessionManager = sessionManager;
+
+    // --------- MODO ESTRATÉGIA ---------
+    this.strategyMode = options.mode === 'ppcp' ? 'ppcp' : 'standard';
+
+    if (this.strategyMode === 'ppcp') {
+      // Na PPCP, DigitDiff/UnderOver não são usados, martingale padrão desativado
+      this.useDigitDifferStrategy = false;
+      this.useUnderOverStrategy = false;
+      this.useMartingaleEvenOdd = false;
+
+      this.ppcpState = {
+        initialStake: options.ppcpInitialStake || 1.0,
+        currentStake: options.ppcpInitialStake || 1.0,
+        sessionTrades: [],   // trades da "sessão PPCP corrente"
+        sessionProfit: 0     // lucro acumulado desta sessão de recuperação
+      };
+    } else {
+      // Modo padrão (como era antes)
+      this.useDigitDifferStrategy = useDigitDifferStrategy;
+      this.useUnderOverStrategy = useUnderOverStrategy;
+      this.useMartingaleEvenOdd = useMartingaleEvenOdd;
+      this.ppcpState = null;
+    }
   
     this.ws = null;
     this.isConnected = false;
@@ -21,7 +53,7 @@ export class DerivClient {
     this.sessionHistory = [];
     this.startTime = Date.now();
   
-    // Estado de trading para estratégia Even/Odd (com martingale opcional, sessões, etc.)
+    // Estado de trading para estratégia Even/Odd
     this.tradingState = {
       isActive: false,
       currentSymbol: null,
@@ -35,7 +67,7 @@ export class DerivClient {
       timeoutId: null
     };
 
-    // Estado de trading separado para estratégia Digit Differs (sem gale, stake fixo 5%)
+    // Estado de trading separado para Digit Differs
     this.digitDifferState = {
       isActive: false,
       currentSymbol: null,
@@ -45,7 +77,7 @@ export class DerivClient {
       timeoutId: null
     };
 
-    // Estado de trading para estratégia Under/Over (sem gale, stake fixo 1%)
+    // Estado de trading para Under/Over
     this.underOverState = {
       isActive: false,
       currentSymbol: null,
@@ -152,9 +184,7 @@ export class DerivClient {
         `| estados: EvenOdd.isActive=${this.tradingState.isActive}, DigitDiff.isActive=${this.digitDifferState.isActive}, UnderOver.isActive=${this.underOverState.isActive}`
       );
 
-      // ASSOCIAÇÃO PELO ESTADO ATIVO
       if (this.tradingState.isActive && !this.digitDifferState.isActive && !this.underOverState.isActive) {
-        // Even/Odd
         this.tradingState.contractId = contractId;
         console.log(`[${this.chatId}] 🔵 Armazenado contractId Even/Odd: ${contractId}`);
 
@@ -171,7 +201,6 @@ export class DerivClient {
         }, 15000);
 
       } else if (this.digitDifferState.isActive && !this.tradingState.isActive && !this.underOverState.isActive) {
-        // Digit Differs
         this.digitDifferState.contractId = contractId;
         console.log(`[${this.chatId}] 🟣 Armazenado contractId Digit Differs: ${contractId}`);
 
@@ -188,7 +217,6 @@ export class DerivClient {
         }, 15000);
 
       } else if (this.underOverState.isActive && !this.tradingState.isActive && !this.digitDifferState.isActive) {
-        // Under/Over
         this.underOverState.contractId = contractId;
         console.log(`[${this.chatId}] 🟠 Armazenado contractId Under/Over: ${contractId}`);
 
@@ -295,32 +323,35 @@ export class DerivClient {
       return;
     }
   
-    // 1) Oportunidades Even/Odd (lógica original) - PRIORIDADE
+    // 1) Oportunidades Even/Odd (sempre usadas em ambos modos)
     const pattern = this.analyzePatternEvenOdd(symbol);
     if (pattern.isOpportunity) {
       this.executeEvenOddTrade(symbol, pattern.suggestion, pattern);
       return;
     }
 
-    // 2) Oportunidades Under/Over (se habilitado)
-    if (this.useUnderOverStrategy) {
-      const underOverPattern = this.analyzePatternUnderOver(symbol);
-      if (underOverPattern.isOpportunity) {
-        this.executeUnderOverTrade(symbol, underOverPattern);
-        return;
+    // Modo padrão: também considera Under/Over e Digit Differs
+    if (this.strategyMode === 'standard') {
+      // 2) Oportunidades Under/Over (se habilitado)
+      if (this.useUnderOverStrategy) {
+        const underOverPattern = this.analyzePatternUnderOver(symbol);
+        if (underOverPattern.isOpportunity) {
+          this.executeUnderOverTrade(symbol, underOverPattern);
+          return;
+        }
       }
-    }
 
-    // 3) Oportunidades Digit Differs (se habilitado)
-    if (this.useDigitDifferStrategy) {
-      const diffPattern = this.analyzePatternDigitDiffer(symbol);
-      if (diffPattern.isOpportunity) {
-        this.executeDigitDifferTrade(symbol, diffPattern.predictionDigit, diffPattern);
+      // 3) Oportunidades Digit Differs (se habilitado)
+      if (this.useDigitDifferStrategy) {
+        const diffPattern = this.analyzePatternDigitDiffer(symbol);
+        if (diffPattern.isOpportunity) {
+          this.executeDigitDifferTrade(symbol, diffPattern.predictionDigit, diffPattern);
+        }
       }
     }
   }
 
-  // --------- ESTRATÉGIA EVEN/ODD (original com martingale opcional) ---------
+  // --------- ESTRATÉGIA EVEN/ODD (com dois modos: standard e PPCP) ---------
   analyzePatternEvenOdd(symbol) {
     const history = this.digitHistory[symbol];
   
@@ -349,7 +380,44 @@ export class DerivClient {
   executeEvenOddTrade(symbol, tradeType, patternInfo) {
     if (!this.isConnected) return;
   
-    // Recalcula baseStake no início de cada sessão
+    // -------- MODO PPCP --------
+    if (this.strategyMode === 'ppcp') {
+      // stake definida pela lógica de recuperação PPCP
+      const stake = this.ppcpState.currentStake;
+
+      this.tradingState.isActive = true;
+      this.tradingState.currentSymbol = symbol;
+      this.tradingState.currentType = tradeType;
+      this.tradingState.currentStake = stake;
+
+      const message = `
+🎯 *Oportunidade Detectada (Even/Odd) - PPCP!*
+
+📊 Ativo: ${this.symbols[symbol].name}
+🔢 Padrão: 10x ${tradeType === 'even' ? 'ÍMPARES' : 'PARES'}
+💰 Entrada: ${tradeType.toUpperCase()}
+💵 Stake (PPCP): ${this.balance.currency} ${stake.toFixed(2)}
+📌 Modo: *PPCP*
+      `;
+    
+      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+    
+      const proposal = {
+        proposal: 1,
+        amount: stake,
+        basis: 'stake',
+        contract_type: tradeType === 'even' ? 'DIGITEVEN' : 'DIGITODD',
+        currency: this.balance.currency,
+        duration: 1,
+        duration_unit: 't',
+        symbol: symbol
+      };
+    
+      this.ws.send(JSON.stringify(proposal));
+      return;
+    }
+
+    // -------- MODO PADRÃO (como estava antes) --------
     if (this.tradingState.attemptNumber === 0) {
       let base = this.balance.current * 0.005;
       if (base < 0.5) base = 0.5;
@@ -395,7 +463,6 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       const stake = this.tradingState.baseStake * Math.pow(2, this.tradingState.attemptNumber);
       return Math.round(stake * 100) / 100;
     } else {
-      // Sem martingale: sempre 0.5% do saldo atual
       let stake = this.balance.current * 0.005;
       if (stake < 0.5) stake = 0.5;
       return Math.round(stake * 100) / 100;
@@ -404,7 +471,91 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 
   handleEvenOddTradeResult(isWin, profit) {
     console.log(`[${this.chatId}] handleEvenOddTradeResult - isWin: ${isWin}, profit: ${profit}`);
-  
+
+    // --------- MODO PPCP ---------
+    if (this.strategyMode === 'ppcp') {
+      const stake = this.tradingState.currentStake;
+      this.ppcpState.sessionTrades.push({
+        stake,
+        profit,
+        isWin
+      });
+
+      this.ppcpState.sessionProfit += profit;
+
+      const sessionProfit = this.ppcpState.sessionProfit;
+
+      if (isWin) {
+        if (sessionProfit >= 0.01) {
+          // Sessão PPCP atingiu objetivo > 0.01
+          this.addSessionToHistory(true, sessionProfit);
+
+          const message = `
+✅ *Trade Vencedor (PPCP Even/Odd)!*
+
+💰 Lucro da Sessão PPCP: ${this.balance.currency} ${sessionProfit.toFixed(2)}
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
+🎯 Meta Global PPCP: ${this.goalPercentage}%
+
+📌 Sessão PPCP encerrada com sucesso (lucro >= 0.01).
+🔁 Próxima sessão PPCP iniciará com stake inicial ${this.balance.currency} ${this.ppcpState.initialStake.toFixed(2)}.
+          `;
+
+          this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+
+          // Reset da sessão PPCP: volta stake ao inicial, zera histórico da sessão
+          this.ppcpState.currentStake = this.ppcpState.initialStake;
+          this.ppcpState.sessionTrades = [];
+          this.ppcpState.sessionProfit = 0;
+
+          this.resetTradingStateEvenOdd();
+        } else {
+          // Win mas lucro da sessão ainda não chegou em 0.01 → stake seguinte = 1.94x
+          const nextStake = Math.round(stake * 1.94 * 100) / 100;
+          this.ppcpState.currentStake = nextStake;
+
+          const message = `
+✅ *Trade Vencedor (PPCP Even/Odd), porém sessão ainda < 0.01*
+
+💰 Lucro atual da Sessão PPCP: ${this.balance.currency} ${sessionProfit.toFixed(5)}
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
+🎯 Meta Global PPCP: ${this.goalPercentage}%
+
+➡️ Próxima stake PPCP (quando surgir NOVA oportunidade): ${this.balance.currency} ${nextStake.toFixed(2)}
+ℹ️ O bot aguardará uma NOVA oportunidade (10x Even/Odd) para continuar a recuperação.
+          `;
+
+          this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+          this.resetTradingStateEvenOdd();
+        }
+      } else {
+        // LOSS: próxima stake = 1.5x da anterior, aguardando nova oportunidade
+        const nextStake = Math.round(stake * 1.5 * 100) / 100;
+        this.ppcpState.currentStake = nextStake;
+
+        const message = `
+❌ *Trade Perdido (PPCP Even/Odd)*
+
+💸 Resultado desta entrada: ${this.balance.currency} ${profit.toFixed(2)}
+💰 Lucro acumulado da Sessão PPCP: ${this.balance.currency} ${sessionProfit.toFixed(5)}
+💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+📈 Crescimento: ${this.getGrowthPercentage().toFixed(2)}%
+🎯 Meta Global PPCP: ${this.goalPercentage}%
+
+➡️ Próxima stake PPCP (quando surgir NOVA oportunidade): ${this.balance.currency} ${nextStake.toFixed(2)}
+ℹ️ Como na regra PPCP, o bot NÃO entra em sequência, apenas na próxima oportunidade (10x Even/Odd).
+        `;
+
+        this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+        this.resetTradingStateEvenOdd();
+      }
+
+      return;
+    }
+
+    // --------- MODO PADRÃO (código anterior, intacto) ---------
     this.tradingState.sessionTrades.push({
       attemptNumber: this.tradingState.attemptNumber + 1,
       stake: this.tradingState.currentStake,
@@ -432,9 +583,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       this.resetTradingStateEvenOdd();
     
     } else {
-      // LOSS
       if (this.useMartingaleEvenOdd) {
-        // Com martingale: verifica se atingiu max loss
         if (this.tradingState.attemptNumber >= this.tradingState.maxAttempts) {
           this.addSessionToHistory(false, sessionProfitLoss);
         
@@ -451,13 +600,11 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           this.resetTradingStateEvenOdd();
           this.disconnect();
           
-          // Auto-stop
           if (this.sessionManager) {
             this.sessionManager.stopSession(this.chatId);
           }
         
         } else {
-          // Martingale continua
           const message = `
 ❌ *Trade Perdido (Even/Odd)*
 
@@ -475,7 +622,6 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
           }, 1000);
         }
       } else {
-        // Sem martingale: apenas notifica e continua observando
         const message = `
 ❌ *Trade Perdido (Even/Odd)*
 
@@ -505,7 +651,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       currentSymbol: null,
       currentType: null,
       attemptNumber: 0,
-      baseStake: 0,
+      baseStake: this.tradingState.baseStake || 0,
       currentStake: 0,
       maxAttempts: this.maxLosses,
       contractId: null,
@@ -514,7 +660,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     };
   }
 
-  // --------- ESTRATÉGIA DIGIT DIFFERS (4 DÍGITOS) ---------
+  // --------- DIGIT DIFFERS ---------
   analyzePatternDigitDiffer(symbol) {
     const history = this.digitHistory[symbol];
   
@@ -542,6 +688,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 
   executeDigitDifferTrade(symbol, predictionDigit, patternInfo) {
     if (!this.isConnected) return;
+    if (this.strategyMode !== 'standard') return;
 
     let stake = this.balance.current * 0.05;
     if (stake < 0.5) stake = 0.5;
@@ -621,7 +768,7 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     };
   }
 
-  // --------- ESTRATÉGIA UNDER/OVER ---------
+  // --------- UNDER/OVER ---------
   analyzePatternUnderOver(symbol) {
     const history = this.digitHistory[symbol];
   
@@ -630,8 +777,6 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     }
 
     const last10 = history.slice(-10);
-    
-    // Verifica se todos os 10 dígitos são > 6 (ou seja, 7, 8 ou 9)
     const allAbove6 = last10.every(digit => parseInt(digit) > 6);
     
     if (allAbove6) {
@@ -646,8 +791,8 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
 
   executeUnderOverTrade(symbol, patternInfo) {
     if (!this.isConnected) return;
+    if (this.strategyMode !== 'standard') return;
 
-    // 1% do capital, sem gale
     let stake = this.balance.current * 0.01;
     if (stake < 0.5) stake = 0.5;
     stake = Math.round(stake * 100) / 100;
@@ -749,7 +894,6 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       });
       this.disconnect();
       
-      // Auto-stop
       if (this.sessionManager) {
         this.sessionManager.stopSession(this.chatId);
       }
@@ -773,7 +917,6 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       });
       this.disconnect();
       
-      // Auto-stop
       if (this.sessionManager) {
         this.sessionManager.stopSession(this.chatId);
       }
@@ -792,9 +935,11 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
     const winSessions = this.sessionHistory.filter(s => s.result === 'WIN').length;
     const totalSessions = this.sessionHistory.length;
     const winRate = totalSessions > 0 ? (winSessions / totalSessions) * 100 : 0;
+
+    const modeLabel = this.strategyMode === 'ppcp' ? 'PPCP' : 'Even/Odd Padrão';
   
     return `
-🎉 *META ATINGIDA!*
+🎉 *META ATINGIDA! (${modeLabel})*
 
 ⏱ *Tempo de Execução:* ${executionTime}
 💰 *Saldo Inicial:* ${this.balance.currency} ${this.balance.initial.toFixed(2)}
@@ -897,7 +1042,9 @@ ${this.useMartingaleEvenOdd ? `🔢 Tentativa: ${this.tradingState.attemptNumber
       isTrading: this.tradingState.isActive || this.digitDifferState.isActive || this.underOverState.isActive,
       useDigitDifferStrategy: this.useDigitDifferStrategy,
       useUnderOverStrategy: this.useUnderOverStrategy,
-      useMartingaleEvenOdd: this.useMartingaleEvenOdd
+      useMartingaleEvenOdd: this.useMartingaleEvenOdd,
+      strategyMode: this.strategyMode,
+      ppcpState: this.ppcpState
     };
   }
 
