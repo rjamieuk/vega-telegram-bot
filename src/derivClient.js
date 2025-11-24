@@ -38,7 +38,8 @@ export class DerivClient {
         sessionProfit: 0,    // lucro acumulado desta sessão de recuperação
         inSequence: false,   // se está em modo sequência (não aguarda nova oportunidade)
         lastSymbol: null,    // símbolo da última operação
-        lastType: null       // tipo da última operação (even/odd)
+        lastType: null,      // tipo da última operação (even/odd)
+        direction: options.ppcpDirection || 'against'  // 'against' ou 'favor'
       };
     } else {
       // Modo padrão (como era antes)
@@ -383,10 +384,32 @@ export class DerivClient {
       else oddCount++;
     });
   
-    if (evenCount === 10) {
-      return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'odd' };
-    } else if (oddCount === 10) {
-      return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'even' };
+    // -------- LÓGICA DE DIREÇÃO (PPCP) --------
+    if (this.strategyMode === 'ppcp') {
+      const direction = this.ppcpState.direction;
+
+      if (evenCount === 10) {
+        // 10x EVEN detectado
+        if (direction === 'favor') {
+          return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'even' };
+        } else {
+          return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'odd' };
+        }
+      } else if (oddCount === 10) {
+        // 10x ODD detectado
+        if (direction === 'favor') {
+          return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'odd' };
+        } else {
+          return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'even' };
+        }
+      }
+    } else {
+      // Modo padrão: sempre vai contra
+      if (evenCount === 10) {
+        return { type: 'EVEN', count: 10, isOpportunity: true, suggestion: 'odd' };
+      } else if (oddCount === 10) {
+        return { type: 'ODD', count: 10, isOpportunity: true, suggestion: 'even' };
+      }
     }
   
     return { type: 'MIXED', count: 0, isOpportunity: false };
@@ -427,7 +450,7 @@ export class DerivClient {
 🎯 *Oportunidade Detectada (PPCP)*
 
 📊 Ativo: ${this.symbols[symbol].name}
-🔢 Padrão: 10x ${tradeType === 'even' ? 'ÍMPARES' : 'PARES'}
+🔢 Padrão: 10x ${patternInfo.type}
 💰 Entrada: ${tradeType.toUpperCase()}
 💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
 📌 Modo: PPCP
