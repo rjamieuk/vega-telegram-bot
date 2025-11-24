@@ -49,7 +49,8 @@ export class UserStore {
         maxGlobalLoss: null,
         strategyMode: 'standard',
         ppcpInitialStake: 1.0,
-        ppcpDirection: 'against'
+        ppcpDirection: 'against',
+        digitHunterInitialStake: 1.0
       };
     }
     // Garantir que campos novos existam em usuários antigos
@@ -61,6 +62,9 @@ export class UserStore {
     }
     if (this.users[chatId].ppcpDirection === undefined) {
       this.users[chatId].ppcpDirection = 'against';
+    }
+    if (this.users[chatId].digitHunterInitialStake === undefined) {
+      this.users[chatId].digitHunterInitialStake = 1.0;
     }
   }
 
@@ -172,6 +176,17 @@ export class UserStore {
   getPPCPDirection(chatId) {
     this._ensureUser(chatId);
     return this.users[chatId].ppcpDirection || 'against';
+  }
+
+  setDigitHunterInitialStake(chatId, stake) {
+    this._ensureUser(chatId);
+    this.users[chatId].digitHunterInitialStake = stake;
+    this.save();
+  }
+
+  getDigitHunterInitialStake(chatId) {
+    this._ensureUser(chatId);
+    return this.users[chatId].digitHunterInitialStake || 1.0;
   }
 
   getUser(chatId) {

@@ -61,7 +61,7 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
         return;
       }
 
-      const modeLabel = status.strategyMode === 'ppcp' ? 'PPCP' : 'Default';
+      const modeLabel = status.strategyMode === 'ppcp' ? 'PPCP' : status.strategyMode === 'digithunter' ? 'DigitHunter' : 'Default';
       const globalLossText = status.maxGlobalLoss 
         ? `\n🚨 *Max Loss Global:* -${Math.abs(status.maxGlobalLoss)}%` 
         : '';
@@ -79,6 +79,11 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
 💰 *Stake Atual:* ${status.currency} ${status.ppcpState.currentStake.toFixed(2)}
 🎲 *Direção:* ${directionLabel}
 🔄 *Em Sequência:* ${status.ppcpState.inSequence ? '✅ Sim' : '❌ Não'}`;
+      } else if (status.strategyMode === 'digithunter' && status.digitHunterState) {
+        strategyInfo = `
+💵 *Stake Inicial:* ${status.currency} ${status.digitHunterState.initialStake.toFixed(2)}
+💰 *Stake Atual:* ${status.currency} ${status.digitHunterState.currentStake.toFixed(2)}
+🔄 *Em Sequência:* ${status.digitHunterState.inSequence ? '✅ Sim' : '❌ Não'}`;
       }
 
       const message = `
@@ -118,6 +123,9 @@ Escolha sua estratégia:
         [
           { text: currentMode === 'standard' ? '✅ Default' : 'Default', callback_data: 'mode_standard' },
           { text: currentMode === 'ppcp' ? '✅ PPCP' : 'PPCP', callback_data: 'mode_ppcp' }
+        ],
+        [
+          { text: currentMode === 'digithunter' ? '✅ DigitHunter' : 'DigitHunter', callback_data: 'mode_digithunter' }
         ]
       ]
     };
@@ -133,6 +141,8 @@ Escolha sua estratégia:
 
     if (mode === 'ppcp') {
       this.showPPCPConfigMenu(chatId);
+    } else if (mode === 'digithunter') {
+      this.showDigitHunterConfigMenu(chatId);
     } else {
       this.showStandardConfigMenu(chatId);
     }
@@ -154,6 +164,15 @@ Escolha sua estratégia:
     const goal = this.userStore.getGoalPercentage(chatId);
 
     return !!(token && goal);
+  }
+
+  // ✅ FUNÇÃO AUXILIAR: verifica se config DigitHunter está completa
+  isDigitHunterConfigComplete(chatId) {
+    const token = this.userStore.getToken(chatId);
+    const goal = this.userStore.getGoalPercentage(chatId);
+    const stake = this.userStore.getDigitHunterInitialStake(chatId);
+
+    return !!(token && goal && stake);
   }
 
   showPPCPConfigMenu(chatId) {
@@ -192,6 +211,49 @@ Escolha o que deseja configurar:
 
     // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
     if (this.isPPCPConfigComplete(chatId)) {
+      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+        [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
+      );
+    }
+
+    this.bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+  }
+
+  showDigitHunterConfigMenu(chatId) {
+    const token = this.userStore.getToken(chatId);
+    const goalPercentage = this.userStore.getGoalPercentage(chatId);
+    const maxGlobalLoss = this.userStore.getMaxGlobalLoss(chatId);
+    const digitHunterInitialStake = this.userStore.getDigitHunterInitialStake(chatId);
+
+    const tokenStatus = token ? '✅' : '❌';
+    const globalLossText = maxGlobalLoss ? `${maxGlobalLoss}%` : 'Não definido';
+
+    const message = `
+⚙️ *Configurações DigitHunter*
+
+${tokenStatus} *Token API:* ${token ? 'Configurado' : 'Não configurado'}
+🎯 *Meta de Lucro:* ${goalPercentage}%
+🚨 *Max Loss Global:* ${globalLossText}
+💵 *Stake Inicial:* ${digitHunterInitialStake.toFixed(2)} USD
+
+Escolha o que deseja configurar:
+    `;
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
+        [{ text: '🎯 Definir Meta de Lucro', callback_data: 'config_goal' }],
+        [{ text: '🚨 Definir Max Loss Global', callback_data: 'config_global_loss' }],
+        [{ text: '💵 Definir Stake Inicial', callback_data: 'config_digithunter_stake' }],
+        [{ text: '🔙 Voltar', callback_data: 'back_to_mode_selection' }]
+      ]
+    };
+
+    // ✅ ADICIONA BOTÃO "INICIAR SESSÃO" SE CONFIG ESTIVER COMPLETA
+    if (this.isDigitHunterConfigComplete(chatId)) {
       keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
       );
@@ -283,6 +345,14 @@ Escolha o que deseja configurar:
       if (data === 'mode_ppcp') {
         this.userStore.setStrategyMode(chatId, 'ppcp');
         this.bot.answerCallbackQuery(query.id, { text: '✅ Modo PPCP selecionado' });
+        this.bot.deleteMessage(chatId, query.message.message_id);
+        this.showStrategyConfigMenu(chatId);
+        return;
+      }
+
+      if (data === 'mode_digithunter') {
+        this.userStore.setStrategyMode(chatId, 'digithunter');
+        this.bot.answerCallbackQuery(query.id, { text: '✅ Modo DigitHunter selecionado' });
         this.bot.deleteMessage(chatId, query.message.message_id);
         this.showStrategyConfigMenu(chatId);
         return;
@@ -433,6 +503,29 @@ Direção atual: *${currentDirection === 'favor' ? 'A Favor' : 'Contra'}*
         this.bot.answerCallbackQuery(query.id, { text: '✅ Direção: A Favor' });
         this.bot.deleteMessage(chatId, query.message.message_id);
         this.showStrategyConfigMenu(chatId);
+        return;
+      }
+
+      // Configurações DigitHunter
+      if (data === 'config_digithunter_stake') {
+        this.bot.answerCallbackQuery(query.id);
+        this.bot.sendMessage(chatId, '💵 *Definir Stake Inicial DigitHunter*\n\nEnvie o valor em USD (ex: 1.0):', { parse_mode: 'Markdown' });
+        
+        const stakeListener = (msg) => {
+          if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
+            const stake = parseFloat(msg.text);
+            if (!isNaN(stake) && stake > 0) {
+              this.userStore.setDigitHunterInitialStake(chatId, stake);
+              this.bot.sendMessage(chatId, `✅ Stake inicial definida para ${stake.toFixed(2)} USD`);
+              this.bot.removeListener('message', stakeListener);
+              this.showStrategyConfigMenu(chatId);
+            } else {
+              this.bot.sendMessage(chatId, '❌ Valor inválido. Tente novamente.');
+            }
+          }
+        };
+        
+        this.bot.on('message', stakeListener);
         return;
       }
 
