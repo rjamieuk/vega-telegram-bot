@@ -5,7 +5,7 @@ export class SessionManager {
     this.bot = bot;
     this.userStore = userStore;
     this.sessions = new Map();
-    this.searchingMessages = new Map();
+    this.searchingMessages = new Map(); // chatId -> { messageId, intervalId, lastEditAt }
   }
 
   hasActiveSession(chatId) {
@@ -226,7 +226,7 @@ Use /stop para encerrar
 
       const client = new DerivClient(
         user.token,
-        10,              // HardTest: meta fixa 10% por sessão interna
+        10,
         null,
         chatId,
         this.bot,
@@ -251,10 +251,10 @@ Use /stop para encerrar
 • Usa DIGITMATCH com dígito aleatório (0–9) a cada entrada
 • Stake = 0.5% do saldo (mínimo 0.35 USD, arredondado com 2 casas decimais)
 • Fator de recuperação: 1.13x em caso de loss
-• Meta da sessão HardTest: lucro > 10% sobre o saldo do início da sessão
-• Ao atingir meta: encerra sessão HardTest atual e inicia nova automaticamente com novo cálculo de 0.5%
-• Após 20 perdas consecutivas: assume prejuízo da sessão e inicia nova automaticamente com novo 0.5%
-• O método só para quando você digitar /stop
+• Meta do ciclo: lucro > 10% sobre o saldo do início do ciclo
+• Ao atingir meta: inicia novo ciclo automaticamente com recálculo de stake
+• Após 20 perdas consecutivas: inicia novo ciclo automaticamente
+• O bot só para quando você digitar /stop ou atingir Max Loss Global
 
 ${globalLossText}
 
@@ -264,7 +264,7 @@ Use /stop para encerrar totalmente
 
       try {
         await client.connect();
-        this.startSearchingAnimation(chatId);
+        // HardTest NÃO tem animação de busca
       } catch (error) {
         this.bot.sendMessage(chatId, `❌ Erro ao conectar: ${error.message}`);
         this.sessions.delete(chatId);
@@ -274,6 +274,17 @@ Use /stop para encerrar totalmente
   }
 
   startSearchingAnimation(chatId) {
+    // Se já existe animação rodando, não cria outra
+    if (this.searchingMessages.has(chatId)) {
+      return;
+    }
+
+    // Se a estratégia for HardTest, não cria animação
+    const client = this.sessions.get(chatId);
+    if (client && client.strategyMode === 'hardtest') {
+      return;
+    }
+
     const emojis = ['🔍', '🔎', '👀', '🎯'];
     let index = 0;
 
@@ -285,8 +296,13 @@ Use /stop para encerrar totalmente
           { parse_mode: 'Markdown' }
         );
 
-        this.searchingMessages.set(chatId, { messageId: msg.message_id, intervalId: null });
+        this.searchingMessages.set(chatId, {
+          messageId: msg.message_id,
+          intervalId: null,
+          lastEditAt: Date.now()
+        });
 
+        // Intervalo de 10s em vez de 2s para reduzir carga
         const intervalId = setInterval(async () => {
           if (!this.sessions.has(chatId)) {
             clearInterval(intervalId);
@@ -312,6 +328,18 @@ Use /stop para encerrar totalmente
             return;
           }
 
+          const searchData = this.searchingMessages.get(chatId);
+          if (!searchData) {
+            clearInterval(intervalId);
+            return;
+          }
+
+          // Só edita se passou pelo menos 10s desde a última edição
+          const now = Date.now();
+          if (now - searchData.lastEditAt < 10000) {
+            return;
+          }
+
           index = (index + 1) % emojis.length;
           try {
             await this.bot.editMessageText(
@@ -322,10 +350,11 @@ Use /stop para encerrar totalmente
                 parse_mode: 'Markdown'
               }
             );
+            searchData.lastEditAt = now;
           } catch (e) {
-            // ignora erros de edição
+            // ignora erros de edição (ex: mensagem não mudou)
           }
-        }, 2000);
+        }, 10000); // 10 segundos
 
         const searchData = this.searchingMessages.get(chatId);
         if (searchData) {
@@ -379,7 +408,16 @@ Use /stop para encerrar totalmente
 
   notifyIdle(chatId) {
     if (!this.sessions.has(chatId)) return;
+
+    const client = this.sessions.get(chatId);
+    // HardTest não tem animação de busca
+    if (client && client.strategyMode === 'hardtest') {
+      return;
+    }
+
+    // Se já existe animação, não cria outra
     if (this.searchingMessages.has(chatId)) return;
+
     this.startSearchingAnimation(chatId);
   }
 }
