@@ -187,6 +187,7 @@ Escolha sua estratégia:
     return !!(token && goal && stake);
   }
 
+  // HardTest: agora exige token + meta de ciclo + máx. recuperações
   isHardTestConfigComplete(chatId) {
     const token = this.userStore.getToken(chatId);
     const cycleGoal = this.userStore.getHardTestCycleGoal(chatId);
@@ -229,7 +230,9 @@ Escolha o que deseja configurar:
     };
 
     if (this.isPPCPConfigComplete(chatId)) {
-      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+      keyboard.inline_keyboard.splice(
+        keyboard.inline_keyboard.length - 1,
+        0,
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
       );
     }
@@ -271,7 +274,9 @@ Escolha o que deseja configurar:
     };
 
     if (this.isDigitHunterConfigComplete(chatId)) {
-      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+      keyboard.inline_keyboard.splice(
+        keyboard.inline_keyboard.length - 1,
+        0,
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
       );
     }
@@ -282,6 +287,7 @@ Escolha o que deseja configurar:
     });
   }
 
+  // HardTest config – agora com meta de ciclo e máx. recuperações configuráveis
   showHardTestConfigMenu(chatId) {
     const token = this.userStore.getToken(chatId);
     const maxGlobalLoss = this.userStore.getMaxGlobalLoss(chatId);
@@ -297,7 +303,7 @@ Escolha o que deseja configurar:
 ${tokenStatus} *Token API:* ${token ? 'Configurado' : 'Não configurado'}
 🎯 *Meta do Ciclo:* ${cycleGoal}%
 🔁 *Máx. Recuperações:* ${maxRecoveries}
-💵 *Stake por Ciclo:* 0.5% do saldo (mínimo 0.35 USD)
+💵 *Stake Inicial por Ciclo:* 0.5% do saldo (mínimo 0.35 USD)
 🚨 *Max Loss Global:* ${globalLossText}
 
 *Atenção:* HardTest executa em loop até que você use /stop.
@@ -316,7 +322,9 @@ Escolha o que deseja configurar:
     };
 
     if (this.isHardTestConfigComplete(chatId)) {
-      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+      keyboard.inline_keyboard.splice(
+        keyboard.inline_keyboard.length - 1,
+        0,
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
       );
     }
@@ -370,7 +378,9 @@ Escolha o que deseja configurar:
     };
 
     if (this.isStandardConfigComplete(chatId)) {
-      keyboard.inline_keyboard.splice(keyboard.inline_keyboard.length - 1, 0, 
+      keyboard.inline_keyboard.splice(
+        keyboard.inline_keyboard.length - 1,
+        0,
         [{ text: '▶️ Iniciar Sessão', callback_data: 'start_session' }]
       );
     }
@@ -463,7 +473,11 @@ Escolha o que deseja configurar:
       // Configurações comuns (token / goal / global loss)
       if (data === 'config_token') {
         this.bot.answerCallbackQuery(query.id);
-        this.bot.sendMessage(chatId, '🔑 *Configurar Token API*\n\nEnvie seu token da Deriv:', { parse_mode: 'Markdown' });
+        this.bot.sendMessage(
+          chatId,
+          '🔑 *Configurar Token API*\n\nEnvie seu token da Deriv:',
+          { parse_mode: 'Markdown' }
+        );
         
         const tokenListener = (msg) => {
           if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
@@ -480,7 +494,11 @@ Escolha o que deseja configurar:
 
       if (data === 'config_goal') {
         this.bot.answerCallbackQuery(query.id);
-        this.bot.sendMessage(chatId, '🎯 *Definir Meta de Lucro*\n\nEnvie a porcentagem desejada (ex: 5 para 5%):', { parse_mode: 'Markdown' });
+        this.bot.sendMessage(
+          chatId,
+          '🎯 *Definir Meta de Lucro*\n\nEnvie a porcentagem desejada (ex: 5 para 5%):',
+          { parse_mode: 'Markdown' }
+        );
         
         const goalListener = (msg) => {
           if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
@@ -534,7 +552,11 @@ Escolha o que deseja configurar:
       // PPCP
       if (data === 'config_ppcp_stake') {
         this.bot.answerCallbackQuery(query.id);
-        this.bot.sendMessage(chatId, '💵 *Definir Stake Inicial PPCP*\n\nEnvie o valor em USD (ex: 1.0):', { parse_mode: 'Markdown' });
+        this.bot.sendMessage(
+          chatId,
+          '💵 *Definir Stake Inicial PPCP*\n\nEnvie o valor em USD (ex: 1.0):',
+          { parse_mode: 'Markdown' }
+        );
         
         const stakeListener = (msg) => {
           if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
@@ -608,7 +630,11 @@ Direção atual: *${currentDirection === 'favor' ? 'A Favor' : 'Contra'}*
       // DigitHunter
       if (data === 'config_digithunter_stake') {
         this.bot.answerCallbackQuery(query.id);
-        this.bot.sendMessage(chatId, '💵 *Definir Stake Inicial DigitHunter*\n\nEnvie o valor em USD (ex: 1.0):', { parse_mode: 'Markdown' });
+        this.bot.sendMessage(
+          chatId,
+          '💵 *Definir Stake Inicial DigitHunter*\n\nEnvie o valor em USD (ex: 1.0):',
+          { parse_mode: 'Markdown' }
+        );
         
         const stakeListener = (msg) => {
           if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
@@ -694,7 +720,11 @@ Direção atual: *${currentDirection === 'favor' ? 'A Favor' : 'Contra'}*
 
       if (data === 'config_max_losses') {
         this.bot.answerCallbackQuery(query.id);
-        this.bot.sendMessage(chatId, '🔢 *Definir Max Losses*\n\nEnvie o número máximo de tentativas no Martingale (ex: 6):', { parse_mode: 'Markdown' });
+        this.bot.sendMessage(
+          chatId,
+          '🔢 *Definir Max Losses*\n\nEnvie o número máximo de tentativas no Martingale (ex: 6):',
+          { parse_mode: 'Markdown' }
+        );
         
         const maxLossListener = (msg) => {
           if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
