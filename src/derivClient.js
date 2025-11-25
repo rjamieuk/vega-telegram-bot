@@ -76,13 +76,14 @@ export class DerivClient {
       this.digitHunterState = null;
 
       this.hardTestState = {
+        cycleNumber: 0,
         cycleBaseBalance: 0,
         cycleTargetProfit: 0,
         cycleProfitAccumulated: 0,
+        cycleTradesCount: 0,
         currentStake: 0,
         baseStake: 0,
         lossesInARow: 0,
-        cycleNumber: 0,
         winCycles: 0,
         lossCycles: 0,
         isPaused: false,
@@ -335,11 +336,7 @@ export class DerivClient {
 
         this.hardTestState.trade.contractId = contractId;
         this.hardTestState.trade.timeoutId = setTimeout(() => {
-          this.bot.sendMessage(
-            this.chatId,
-            `⚠️ *Timeout no contrato HardTest*\n\nContrato ${contractId} sem retorno em 15s.\nResetando estado...`,
-            { parse_mode: 'Markdown' }
-          );
+          console.error(`[${this.chatId}] ⚠️ Timeout no contrato HardTest ${contractId}`);
           this.resetHardTestTradeState();
         }, 15000);
       }
@@ -425,7 +422,7 @@ export class DerivClient {
 
     if (anyTradeActive) return;
 
-    // HardTest em pausa (aguardando 10s após win)
+    // HardTest em pausa (aguardando 10s após fim de ciclo)
     if (this.strategyMode === 'hardtest' && this.hardTestState?.isPaused) {
       return;
     }
@@ -1015,7 +1012,7 @@ export class DerivClient {
     }
   }
 
-  // ================= HARDTEST =================
+  // ================= HARDTEST (MODO SILENCIOSO) =================
 
   initHardTestCycle() {
     if (!this.hardTestState) return;
@@ -1024,6 +1021,7 @@ export class DerivClient {
     this.hardTestState.cycleBaseBalance = this.balance.current;
     this.hardTestState.cycleTargetProfit = this.balance.current * 0.10;
     this.hardTestState.cycleProfitAccumulated = 0;
+    this.hardTestState.cycleTradesCount = 0;
     this.hardTestState.lossesInARow = 0;
 
     let stake = this.balance.current * 0.005;
@@ -1033,20 +1031,20 @@ export class DerivClient {
     this.hardTestState.baseStake = stake;
     this.hardTestState.currentStake = stake;
 
+    // Mensagem de INÍCIO do ciclo
     this.bot.sendMessage(this.chatId, `
-🧪 *Ciclo HardTest #${this.hardTestState.cycleNumber} Iniciado*
+🚀 *HardTest - Ciclo #${this.hardTestState.cycleNumber} Iniciado*
 
-💰 Saldo base do ciclo: ${this.balance.currency} ${this.hardTestState.cycleBaseBalance.toFixed(2)}
-🎯 Meta do ciclo (10%): ${this.balance.currency} ${this.hardTestState.cycleTargetProfit.toFixed(2)}
-💵 Stake base (0.5% / mín 0.35): ${this.balance.currency} ${stake.toFixed(2)}
-📊 Ciclos anteriores: ✅ ${this.hardTestState.winCycles} | ❌ ${this.hardTestState.lossCycles}
+💰 Saldo Inicial: ${this.balance.currency} ${this.hardTestState.cycleBaseBalance.toFixed(2)}
+🎯 Meta do Ciclo: +${this.hardTestState.cycleTargetProfit.toFixed(2)} USD (+10%)
+💵 Stake Base: ${this.balance.currency} ${stake.toFixed(2)}
+
+_Operações em modo silencioso. Resumo será enviado ao final do ciclo._
     `.trim(), { parse_mode: 'Markdown' });
   }
 
   executeHardTestTrade(symbol) {
     if (!this.isConnected || !this.hardTestState) return;
-
-    // Não chama notifySearchingStop para HardTest
 
     const digit = Math.floor(Math.random() * 10);
     const stake = this.hardTestState.currentStake;
@@ -1056,15 +1054,7 @@ export class DerivClient {
     this.hardTestState.trade.predictionDigit = digit;
     this.hardTestState.trade.stake = stake;
 
-    const message = `
-🧪 *Entrada HardTest (Ciclo #${this.hardTestState.cycleNumber})*
-
-📊 Ativo: ${this.symbols[symbol].name}
-🎯 Dígito Aleatório: *${digit}*
-💰 Entrada: *DIGITMATCH ${digit}*
-💵 Stake: ${this.balance.currency} ${stake.toFixed(2)}
-    `.trim();
-    this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+    // SEM mensagem de entrada aqui (modo silencioso)
 
     const proposal = {
       proposal: 1,
@@ -1086,115 +1076,104 @@ export class DerivClient {
       return;
     }
 
-    const stake = this.hardTestState.trade.stake;
-    const digit = this.hardTestState.trade.predictionDigit;
-
     this.hardTestState.cycleProfitAccumulated += profit;
-
-    const cycleProgress = this.hardTestState.cycleTargetProfit > 0
-      ? (this.hardTestState.cycleProfitAccumulated / this.hardTestState.cycleTargetProfit) * 100
-      : 0;
+    this.hardTestState.cycleTradesCount += 1;
 
     if (isWin) {
       this.hardTestState.lossesInARow = 0;
       this.hardTestState.currentStake = this.hardTestState.baseStake;
 
-      const message = `
-✅ *Trade Vencedor (HardTest)*
-
-🎯 Dígito: *${digit}*
-💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-
-📊 *Progresso do Ciclo #${this.hardTestState.cycleNumber}:*
-💰 Lucro acumulado: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
-🎯 Meta do ciclo: ${this.balance.currency} ${this.hardTestState.cycleTargetProfit.toFixed(2)}
-📈 Progresso: ${cycleProgress.toFixed(2)}%
-      `.trim();
-      this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
+      // Verifica se atingiu meta de 10%
       if (this.hardTestState.cycleProfitAccumulated >= this.hardTestState.cycleTargetProfit) {
         this.hardTestState.winCycles += 1;
 
+        // Mensagem de RESUMO (meta atingida)
         this.bot.sendMessage(this.chatId, `
-🎉 *Ciclo HardTest #${this.hardTestState.cycleNumber} CONCLUÍDO COM SUCESSO!*
+✅ *HardTest - Ciclo #${this.hardTestState.cycleNumber} Finalizado*
 
-✅ Meta de 10% atingida!
-💰 Lucro do ciclo: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
-💵 Novo saldo: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+🎯 Meta de 10% atingida neste ciclo.
+
+📊 *Resumo do Ciclo*
+• Entradas: ${this.hardTestState.cycleTradesCount}
+• Lucro/Prejuízo: ${this.hardTestState.cycleProfitAccumulated.toFixed(2)} USD
+• Saldo Inicial: ${this.hardTestState.cycleBaseBalance.toFixed(2)} USD
+• Saldo Final Estimado: ${this.balance.current.toFixed(2)} USD
 
 📊 *Histórico de Ciclos:*
 ✅ Vitórias: ${this.hardTestState.winCycles}
 ❌ Derrotas: ${this.hardTestState.lossCycles}
 
-🔁 Iniciando novo ciclo com recálculo de stake...
+_Aguardando 10 segundos para iniciar novo ciclo..._
         `.trim(), { parse_mode: 'Markdown' });
 
-        this.initHardTestCycle();
-      } else {
-        // WIN mas ainda não bateu meta: pausa de 10s
         this.hardTestState.isPaused = true;
-        this.bot.sendMessage(this.chatId, `⏸ Aguardando 10 segundos...`);
+        this.resetHardTestTradeState();
 
         setTimeout(() => {
-          if (this.hardTestState) {
+          if (this.hardTestState && this.isConnected) {
             this.hardTestState.isPaused = false;
+            this.initHardTestCycle();
           }
         }, 10000);
+
+        return;
       }
 
+      // WIN mas ainda não bateu meta: pausa de 10s
+      this.hardTestState.isPaused = true;
       this.resetHardTestTradeState();
+
+      setTimeout(() => {
+        if (this.hardTestState) {
+          this.hardTestState.isPaused = false;
+        }
+      }, 10000);
+
       return;
     }
 
     // LOSS
     this.hardTestState.lossesInARow += 1;
 
-    const message = `
-❌ *Trade Perdedor (HardTest)*
-
-🎯 Dígito: *${digit}*
-💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
-
-📊 *Progresso do Ciclo #${this.hardTestState.cycleNumber}:*
-💰 Lucro acumulado: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
-🎯 Meta do ciclo: ${this.balance.currency} ${this.hardTestState.cycleTargetProfit.toFixed(2)}
-📈 Progresso: ${cycleProgress.toFixed(2)}%
-📉 Perdas consecutivas: ${this.hardTestState.lossesInARow}/20
-    `.trim();
-    this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-
     if (this.hardTestState.lossesInARow >= 20) {
       this.hardTestState.lossCycles += 1;
 
+      // Mensagem de RESUMO (20 perdas consecutivas)
       this.bot.sendMessage(this.chatId, `
-🛑 *Ciclo HardTest #${this.hardTestState.cycleNumber} ENCERRADO (20 Losses)*
+✅ *HardTest - Ciclo #${this.hardTestState.cycleNumber} Finalizado*
 
-❌ 20 perdas consecutivas atingidas
-💰 Resultado do ciclo: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
-💵 Saldo atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+⚠️ Ciclo encerrado por atingir 20 perdas consecutivas.
+
+📊 *Resumo do Ciclo*
+• Entradas: ${this.hardTestState.cycleTradesCount}
+• Lucro/Prejuízo: ${this.hardTestState.cycleProfitAccumulated.toFixed(2)} USD
+• Saldo Inicial: ${this.hardTestState.cycleBaseBalance.toFixed(2)} USD
+• Saldo Final Estimado: ${this.balance.current.toFixed(2)} USD
 
 📊 *Histórico de Ciclos:*
 ✅ Vitórias: ${this.hardTestState.winCycles}
 ❌ Derrotas: ${this.hardTestState.lossCycles}
 
-🔁 Iniciando novo ciclo com recálculo de stake...
+_Aguardando 10 segundos para iniciar novo ciclo..._
       `.trim(), { parse_mode: 'Markdown' });
 
-      this.initHardTestCycle();
+      this.hardTestState.isPaused = true;
+      this.resetHardTestTradeState();
 
-    } else {
-      let nextStake = this.hardTestState.currentStake * 1.13;
-      nextStake = Math.round(nextStake * 100) / 100;
-      this.hardTestState.currentStake = nextStake;
+      setTimeout(() => {
+        if (this.hardTestState && this.isConnected) {
+          this.hardTestState.isPaused = false;
+          this.initHardTestCycle();
+        }
+      }, 10000);
 
-      this.bot.sendMessage(this.chatId, `
-↗️ *Recuperação HardTest*
-
-➡️ Próxima stake (1.13x): ${this.balance.currency} ${nextStake.toFixed(2)}
-      `.trim(), { parse_mode: 'Markdown' });
+      return;
     }
+
+    // Recuperação com fator 1.13x
+    let nextStake = this.hardTestState.currentStake * 1.13;
+    nextStake = Math.round(nextStake * 100) / 100;
+    this.hardTestState.currentStake = nextStake;
 
     this.resetHardTestTradeState();
   }
@@ -1215,7 +1194,7 @@ export class DerivClient {
       timeoutId: null
     };
 
-    // Não chama notifySearchingStart para HardTest
+    // HardTest NÃO chama notifySearchingStart
   }
 
   // ================= STATUS / META / ENCERRAMENTO =================
@@ -1428,6 +1407,7 @@ ${hardTestExtra}
         cycleBaseBalance: this.hardTestState.cycleBaseBalance,
         cycleTargetProfit: this.hardTestState.cycleTargetProfit,
         cycleProfitAccumulated: this.hardTestState.cycleProfitAccumulated,
+        cycleTradesCount: this.hardTestState.cycleTradesCount,
         baseStake: this.hardTestState.baseStake,
         currentStake: this.hardTestState.currentStake,
         lossesInARow: this.hardTestState.lossesInARow,
