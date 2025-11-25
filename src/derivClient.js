@@ -76,13 +76,15 @@ export class DerivClient {
       this.digitHunterState = null;
 
       this.hardTestState = {
-        baseBalanceForSession: 0,
+        cycleBaseBalance: 0,
+        cycleTargetProfit: 0,
+        cycleProfitAccumulated: 0,
         currentStake: 0,
         baseStake: 0,
-        profitInSession: 0,
         lossesInARow: 0,
-        winSessions: 0,
-        lossSessions: 0,
+        cycleNumber: 0,
+        winCycles: 0,
+        lossCycles: 0,
         trade: {
           isActive: false,
           symbol: null,
@@ -169,8 +171,6 @@ export class DerivClient {
     });
   }
 
-  // ================= CONEXÃO =================
-
   async connect() {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
@@ -218,7 +218,7 @@ export class DerivClient {
       this.balance.currency = data.authorize.currency;
 
       if (this.strategyMode === 'hardtest' && this.hardTestState) {
-        this.initHardTestSession();
+        this.initHardTestCycle();
       }
 
       this.ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
@@ -259,10 +259,7 @@ export class DerivClient {
       const contractType = contract.contract_type;
 
       console.log(
-        `[${this.chatId}] ✅ Contrato comprado: ${contractId} (${contractType}) | ` +
-        `EvenOdd=${this.tradingState.isActive}, DigitDiff=${this.digitDifferState.isActive}, ` +
-        `UnderOver=${this.underOverState.isActive}, DigitHunter=${this.digitHunterTradeState.isActive}, ` +
-        `HardTest=${this.hardTestState?.trade?.isActive}`
+        `[${this.chatId}] ✅ Contrato comprado: ${contractId} (${contractType})`
       );
 
       if (this.tradingState.isActive &&
@@ -344,9 +341,6 @@ export class DerivClient {
           );
           this.resetHardTestTradeState();
         }, 15000);
-
-      } else {
-        console.log(`[${this.chatId}] ⚠️ BUY recebido sem estratégia ativa clara.`);
       }
 
       this.ws.send(JSON.stringify({
@@ -401,17 +395,10 @@ export class DerivClient {
             this.hardTestState.trade.timeoutId = null;
           }
           this.handleHardTestResult(profit > 0, profit);
-
-        } else {
-          console.log(
-            `[${this.chatId}] ⚠️ Contrato ${contractId} não corresponde a nenhum estado ativo`
-          );
         }
       }
     }
   }
-
-  // ================= TICKS =================
 
   handleTick(tick) {
     const symbol = tick.symbol;
@@ -502,8 +489,6 @@ export class DerivClient {
       }
     }
   }
-
-  // ================= EVEN / ODD =================
 
   analyzePatternEvenOdd(symbol) {
     const history = this.digitHistory[symbol];
@@ -693,8 +678,6 @@ export class DerivClient {
     }
   }
 
-  // ================= DIGIT DIFFERS =================
-
   analyzePatternDigitDiffer(symbol) {
     const history = this.digitHistory[symbol];
     if (history.length < 5) return { isOpportunity: false };
@@ -799,8 +782,6 @@ export class DerivClient {
     }
   }
 
-  // ================= UNDER / OVER =================
-
   analyzePatternUnderOver(symbol) {
     const history = this.digitHistory[symbol];
     if (history.length < 10) return { isOpportunity: false };
@@ -894,8 +875,6 @@ export class DerivClient {
       this.notifySearchingStart();
     }
   }
-
-  // ================= DIGITHUNTER =================
 
   analyzePatternDigitHunter(symbol) {
     const history = this.digitHistory[symbol];
@@ -1032,10 +1011,14 @@ export class DerivClient {
 
   // ================= HARDTEST =================
 
-  initHardTestSession() {
+  initHardTestCycle() {
     if (!this.hardTestState) return;
 
-    this.hardTestState.baseBalanceForSession = this.balance.current;
+    this.hardTestState.cycleNumber += 1;
+    this.hardTestState.cycleBaseBalance = this.balance.current;
+    this.hardTestState.cycleTargetProfit = this.balance.current * 0.10;
+    this.hardTestState.cycleProfitAccumulated = 0;
+    this.hardTestState.lossesInARow = 0;
 
     let stake = this.balance.current * 0.005;
     if (stake < 0.35) stake = 0.35;
@@ -1043,15 +1026,14 @@ export class DerivClient {
 
     this.hardTestState.baseStake = stake;
     this.hardTestState.currentStake = stake;
-    this.hardTestState.profitInSession = 0;
-    this.hardTestState.lossesInARow = 0;
 
     this.bot.sendMessage(this.chatId, `
-🧪 *Nova Sessão HardTest Iniciada*
+🧪 *Ciclo HardTest #${this.hardTestState.cycleNumber} Iniciado*
 
-💰 Saldo base da sessão: ${this.balance.currency} ${this.hardTestState.baseBalanceForSession.toFixed(2)}
-💵 Stake base (0.5% / min 0.35): ${this.balance.currency} ${stake.toFixed(2)}
-🎯 Meta interna HardTest: lucro > 10% sobre o saldo base desta sessão
+💰 Saldo base do ciclo: ${this.balance.currency} ${this.hardTestState.cycleBaseBalance.toFixed(2)}
+🎯 Meta do ciclo (10%): ${this.balance.currency} ${this.hardTestState.cycleTargetProfit.toFixed(2)}
+💵 Stake base (0.5% / mín 0.35): ${this.balance.currency} ${stake.toFixed(2)}
+📊 Ciclos anteriores: ✅ ${this.hardTestState.winCycles} | ❌ ${this.hardTestState.lossCycles}
     `.trim(), { parse_mode: 'Markdown' });
   }
 
@@ -1069,7 +1051,7 @@ export class DerivClient {
     this.hardTestState.trade.stake = stake;
 
     const message = `
-🧪 *Entrada HardTest*
+🧪 *Entrada HardTest (Ciclo #${this.hardTestState.cycleNumber})*
 
 📊 Ativo: ${this.symbols[symbol].name}
 🎯 Dígito Aleatório: *${digit}*
@@ -1102,41 +1084,48 @@ export class DerivClient {
     const stake = this.hardTestState.trade.stake;
     const digit = this.hardTestState.trade.predictionDigit;
 
-    this.hardTestState.profitInSession += profit;
+    this.hardTestState.cycleProfitAccumulated += profit;
+
+    const cycleProgress = this.hardTestState.cycleTargetProfit > 0
+      ? (this.hardTestState.cycleProfitAccumulated / this.hardTestState.cycleTargetProfit) * 100
+      : 0;
 
     if (isWin) {
       this.hardTestState.lossesInARow = 0;
       this.hardTestState.currentStake = this.hardTestState.baseStake;
-
-      const growthSession = this.hardTestState.baseBalanceForSession > 0
-        ? (this.hardTestState.profitInSession / this.hardTestState.baseBalanceForSession) * 100
-        : 0;
 
       const message = `
 ✅ *Trade Vencedor (HardTest)*
 
 🎯 Dígito: *${digit}*
 💰 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💰 Lucro da Sessão HardTest: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+
+📊 *Progresso do Ciclo #${this.hardTestState.cycleNumber}:*
+💰 Lucro acumulado: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
+🎯 Meta do ciclo: ${this.balance.currency} ${this.hardTestState.cycleTargetProfit.toFixed(2)}
+📈 Progresso: ${cycleProgress.toFixed(2)}%
       `.trim();
       this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
-      if (growthSession >= 10) {
-        this.hardTestState.winSessions += 1;
+      if (this.hardTestState.cycleProfitAccumulated >= this.hardTestState.cycleTargetProfit) {
+        this.hardTestState.winCycles += 1;
 
         this.bot.sendMessage(this.chatId, `
-🎉 *Sessão HardTest Vitoriosa!*
+🎉 *Ciclo HardTest #${this.hardTestState.cycleNumber} CONCLUÍDO COM SUCESSO!*
 
-📈 Lucro da sessão: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
-📊 Sessões HardTest:
-  ✅ Vitórias: ${this.hardTestState.winSessions}
-  ❌ Derrotas: ${this.hardTestState.lossSessions}
+✅ Meta de 10% atingida!
+💰 Lucro do ciclo: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
+💵 Novo saldo: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 
-🔁 Reiniciando automaticamente com novo cálculo de 0.5% do saldo...
+📊 *Histórico de Ciclos:*
+✅ Vitórias: ${this.hardTestState.winCycles}
+❌ Derrotas: ${this.hardTestState.lossCycles}
+
+🔁 Iniciando novo ciclo com recálculo de stake...
         `.trim(), { parse_mode: 'Markdown' });
 
-        this.initHardTestSession();
+        this.initHardTestCycle();
       }
 
       this.resetHardTestTradeState();
@@ -1145,36 +1134,39 @@ export class DerivClient {
 
     this.hardTestState.lossesInARow += 1;
 
-    const growthSession = this.hardTestState.baseBalanceForSession > 0
-      ? (this.hardTestState.profitInSession / this.hardTestState.baseBalanceForSession) * 100
-      : 0;
-
     const message = `
 ❌ *Trade Perdedor (HardTest)*
 
 🎯 Dígito: *${digit}*
 💸 Resultado: ${this.balance.currency} ${profit.toFixed(2)}
-💰 Lucro da Sessão HardTest: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
 💵 Saldo Atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
+
+📊 *Progresso do Ciclo #${this.hardTestState.cycleNumber}:*
+💰 Lucro acumulado: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
+🎯 Meta do ciclo: ${this.balance.currency} ${this.hardTestState.cycleTargetProfit.toFixed(2)}
+📈 Progresso: ${cycleProgress.toFixed(2)}%
 📉 Perdas consecutivas: ${this.hardTestState.lossesInARow}/20
     `.trim();
     this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
 
     if (this.hardTestState.lossesInARow >= 20) {
-      this.hardTestState.lossSessions += 1;
+      this.hardTestState.lossCycles += 1;
 
       this.bot.sendMessage(this.chatId, `
-🛑 *Sessão HardTest Encerrada por 20 Losses Consecutivos*
+🛑 *Ciclo HardTest #${this.hardTestState.cycleNumber} ENCERRADO (20 Losses)*
 
-💰 Resultado da sessão: ${this.balance.currency} ${this.hardTestState.profitInSession.toFixed(2)} (${growthSession.toFixed(2)}%)
-📊 Sessões HardTest:
-  ✅ Vitórias: ${this.hardTestState.winSessions}
-  ❌ Derrotas: ${this.hardTestState.lossSessions}
+❌ 20 perdas consecutivas atingidas
+💰 Resultado do ciclo: ${this.balance.currency} ${this.hardTestState.cycleProfitAccumulated.toFixed(2)}
+💵 Saldo atual: ${this.balance.currency} ${this.balance.current.toFixed(2)}
 
-🔁 Reiniciando automaticamente com novo cálculo de 0.5% do saldo...
+📊 *Histórico de Ciclos:*
+✅ Vitórias: ${this.hardTestState.winCycles}
+❌ Derrotas: ${this.hardTestState.lossCycles}
+
+🔁 Iniciando novo ciclo com recálculo de stake...
       `.trim(), { parse_mode: 'Markdown' });
 
-      this.initHardTestSession();
+      this.initHardTestCycle();
 
     } else {
       let nextStake = this.hardTestState.currentStake * 1.13;
@@ -1240,25 +1232,11 @@ export class DerivClient {
   }
 
   checkGoalReached() {
-    const growth = this.getGrowthPercentage();
-
-    // Para HardTest: meta global NÃO encerra, apenas reinicializa sessão HardTest
     if (this.strategyMode === 'hardtest') {
-      if (growth >= this.goalPercentage) {
-        this.bot.sendMessage(this.chatId, `
-🎯 *Meta Global (${this.goalPercentage}%) atingida no HardTest*
-
-O bot *NÃO será encerrado*.
-Novo stake será recalculado com base no saldo atual.
-🔁 Reiniciando sessão HardTest...
-        `.trim(), { parse_mode: 'Markdown' });
-
-        this.initHardTestSession();
-      }
       return;
     }
 
-    // Demais modos continuam encerrando a sessão
+    const growth = this.getGrowthPercentage();
     if (growth >= this.goalPercentage) {
       const summary = this.generateSummary();
       this.bot.sendMessage(this.chatId, summary, {
@@ -1323,9 +1301,9 @@ Novo stake será recalculado com base no saldo atual.
     let hardTestExtra = '';
     if (this.strategyMode === 'hardtest' && this.hardTestState) {
       hardTestExtra = `
-📊 *Sessões HardTest Internas:*
-✅ Vitórias: ${this.hardTestState.winSessions}
-❌ Derrotas: ${this.hardTestState.lossSessions}
+📊 *Ciclos HardTest:*
+✅ Vitórias: ${this.hardTestState.winCycles}
+❌ Derrotas: ${this.hardTestState.lossCycles}
       `;
     }
 
@@ -1339,7 +1317,7 @@ Novo stake será recalculado com base no saldo atual.
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🎯 *Meta:* ${this.goalPercentage}%
 
-📋 *Total de Sessões (globais):* ${totalSessions}
+📋 *Total de Sessões:* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -1361,9 +1339,9 @@ ${hardTestExtra}
     let hardTestExtra = '';
     if (this.strategyMode === 'hardtest' && this.hardTestState) {
       hardTestExtra = `
-📊 *Sessões HardTest Internas:*
-✅ Vitórias: ${this.hardTestState.winSessions}
-❌ Derrotas: ${this.hardTestState.lossSessions}
+📊 *Ciclos HardTest:*
+✅ Vitórias: ${this.hardTestState.winCycles}
+❌ Derrotas: ${this.hardTestState.lossCycles}
       `;
     }
 
@@ -1377,7 +1355,7 @@ ${hardTestExtra}
 📊 *Crescimento:* ${growth.toFixed(2)}%
 ❌ *Última Sessão:* ${this.balance.currency} ${sessionProfitLoss.toFixed(2)}
 
-📋 *Total de Sessões (globais):* ${totalSessions}
+📋 *Total de Sessões:* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -1399,9 +1377,9 @@ ${hardTestExtra}
     let hardTestExtra = '';
     if (this.strategyMode === 'hardtest' && this.hardTestState) {
       hardTestExtra = `
-📊 *Sessões HardTest Internas:*
-✅ Vitórias: ${this.hardTestState.winSessions}
-❌ Derrotas: ${this.hardTestState.lossSessions}
+📊 *Ciclos HardTest:*
+✅ Vitórias: ${this.hardTestState.winCycles}
+❌ Derrotas: ${this.hardTestState.lossCycles}
       `;
     }
 
@@ -1415,7 +1393,7 @@ ${hardTestExtra}
 📊 *Crescimento:* ${growth.toFixed(2)}%
 🚨 *Limite Global:* -${Math.abs(this.maxGlobalLoss)}%
 
-📋 *Total de Sessões (globais):* ${totalSessions}
+📋 *Total de Sessões:* ${totalSessions}
 ✅ *Vitórias:* ${winSessions}
 ❌ *Derrotas:* ${totalSessions - winSessions}
 📊 *Taxa de Vitória:* ${winRate.toFixed(2)}%
@@ -1436,10 +1414,15 @@ ${hardTestExtra}
     let hardTestStateForStatus = null;
     if (this.strategyMode === 'hardtest' && this.hardTestState) {
       hardTestStateForStatus = {
+        cycleNumber: this.hardTestState.cycleNumber,
+        cycleBaseBalance: this.hardTestState.cycleBaseBalance,
+        cycleTargetProfit: this.hardTestState.cycleTargetProfit,
+        cycleProfitAccumulated: this.hardTestState.cycleProfitAccumulated,
         baseStake: this.hardTestState.baseStake,
         currentStake: this.hardTestState.currentStake,
-        winSessions: this.hardTestState.winSessions,
-        lossSessions: this.hardTestState.lossSessions
+        lossesInARow: this.hardTestState.lossesInARow,
+        winCycles: this.hardTestState.winCycles,
+        lossCycles: this.hardTestState.lossCycles
       };
     }
 
