@@ -90,9 +90,15 @@ Sou um robô automatizado que opera na Deriv com estratégias próprias de anál
 🔄 *Em Sequência:* ${status.digitHunterState.inSequence ? '✅ Sim' : '❌ Não'}`;
       } else if (status.strategyMode === 'hardtest' && status.hardTestState) {
         strategyInfo = `
-💵 *Stake Base (0.5%):* ${status.currency} ${status.hardTestState.baseStake.toFixed(2)}
+🔢 *Ciclo Atual:* #${status.hardTestState.cycleNumber}
+🎯 *Meta do Ciclo:* ${status.hardTestState.cycleGoalPercentage}%
+🔁 *Máx. Recuperações:* ${status.hardTestState.maxRecoveries}
+💵 *Stake Base:* ${status.currency} ${status.hardTestState.baseStake.toFixed(2)}
 💰 *Stake Atual:* ${status.currency} ${status.hardTestState.currentStake.toFixed(2)}
-📋 *Sessões HardTest Internas:* ✅ ${status.hardTestState.winSessions} | ❌ ${status.hardTestState.lossSessions}`;
+📊 *Entradas no Ciclo:* ${status.hardTestState.cycleTradesCount}
+💸 *Lucro/Prejuízo do Ciclo:* ${status.currency} ${status.hardTestState.cycleProfitAccumulated.toFixed(2)}
+🔄 *Perdas Consecutivas:* ${status.hardTestState.lossesInARow}
+📋 *Ciclos:* ✅ ${status.hardTestState.winCycles} | ❌ ${status.hardTestState.lossCycles}`;
       }
 
       const message = `
@@ -181,10 +187,11 @@ Escolha sua estratégia:
     return !!(token && goal && stake);
   }
 
-  // HardTest: precisa só de token (meta e stake são fixos internamente)
   isHardTestConfigComplete(chatId) {
     const token = this.userStore.getToken(chatId);
-    return !!token;
+    const cycleGoal = this.userStore.getHardTestCycleGoal(chatId);
+    const maxRecoveries = this.userStore.getHardTestMaxRecoveries(chatId);
+    return !!(token && cycleGoal && maxRecoveries);
   }
 
   showPPCPConfigMenu(chatId) {
@@ -275,10 +282,11 @@ Escolha o que deseja configurar:
     });
   }
 
-  // HardTest config – só mostra info e botão iniciar se tiver token
   showHardTestConfigMenu(chatId) {
     const token = this.userStore.getToken(chatId);
     const maxGlobalLoss = this.userStore.getMaxGlobalLoss(chatId);
+    const cycleGoal = this.userStore.getHardTestCycleGoal(chatId);
+    const maxRecoveries = this.userStore.getHardTestMaxRecoveries(chatId);
 
     const tokenStatus = token ? '✅' : '❌';
     const globalLossText = maxGlobalLoss ? `${maxGlobalLoss}%` : 'Não definido';
@@ -287,8 +295,9 @@ Escolha o que deseja configurar:
 ⚙️ *Configurações HardTest*
 
 ${tokenStatus} *Token API:* ${token ? 'Configurado' : 'Não configurado'}
-🎯 *Meta Interna da Estratégia:* 10% por sessão HardTest
-💵 *Stake Inicial por Sessão:* 0.5% do saldo (mínimo 0.35 USD)
+🎯 *Meta do Ciclo:* ${cycleGoal}%
+🔁 *Máx. Recuperações:* ${maxRecoveries}
+💵 *Stake por Ciclo:* 0.5% do saldo (mínimo 0.35 USD)
 🚨 *Max Loss Global:* ${globalLossText}
 
 *Atenção:* HardTest executa em loop até que você use /stop.
@@ -299,6 +308,8 @@ Escolha o que deseja configurar:
     const keyboard = {
       inline_keyboard: [
         [{ text: '🔑 Configurar Token', callback_data: 'config_token' }],
+        [{ text: '🎯 Definir Meta do Ciclo', callback_data: 'config_hardtest_cycle_goal' }],
+        [{ text: '🔁 Definir Máx. Recuperações', callback_data: 'config_hardtest_max_recoveries' }],
         [{ text: '🚨 Definir Max Loss Global', callback_data: 'config_global_loss' }],
         [{ text: '🔙 Voltar', callback_data: 'back_to_mode_selection' }]
       ]
@@ -449,7 +460,7 @@ Escolha o que deseja configurar:
         return;
       }
 
-      // Configurações comuns (token / goal / global loss) – mantidas
+      // Configurações comuns (token / goal / global loss)
       if (data === 'config_token') {
         this.bot.answerCallbackQuery(query.id);
         this.bot.sendMessage(chatId, '🔑 *Configurar Token API*\n\nEnvie seu token da Deriv:', { parse_mode: 'Markdown' });
@@ -614,6 +625,60 @@ Direção atual: *${currentDirection === 'favor' ? 'A Favor' : 'Contra'}*
         };
         
         this.bot.on('message', stakeListener);
+        return;
+      }
+
+      // HardTest - Meta do Ciclo
+      if (data === 'config_hardtest_cycle_goal') {
+        this.bot.answerCallbackQuery(query.id);
+        this.bot.sendMessage(
+          chatId,
+          '🎯 *Definir Meta do Ciclo HardTest*\n\nEnvie a porcentagem de lucro desejada por ciclo (ex: 10 para 10%):',
+          { parse_mode: 'Markdown' }
+        );
+        
+        const cycleGoalListener = (msg) => {
+          if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
+            const percentage = parseFloat(msg.text);
+            if (!isNaN(percentage) && percentage > 0) {
+              this.userStore.setHardTestCycleGoal(chatId, percentage);
+              this.bot.sendMessage(chatId, `✅ Meta do ciclo definida para ${percentage}%`);
+              this.bot.removeListener('message', cycleGoalListener);
+              this.showStrategyConfigMenu(chatId);
+            } else {
+              this.bot.sendMessage(chatId, '❌ Valor inválido. Tente novamente.');
+            }
+          }
+        };
+        
+        this.bot.on('message', cycleGoalListener);
+        return;
+      }
+
+      // HardTest - Máximo de Recuperações
+      if (data === 'config_hardtest_max_recoveries') {
+        this.bot.answerCallbackQuery(query.id);
+        this.bot.sendMessage(
+          chatId,
+          '🔁 *Definir Máximo de Recuperações HardTest*\n\nEnvie o número máximo de tentativas consecutivas de recuperação (ex: 20):',
+          { parse_mode: 'Markdown' }
+        );
+        
+        const maxRecoveriesListener = (msg) => {
+          if (msg.chat.id === chatId && msg.text && !msg.text.startsWith('/')) {
+            const maxRecoveries = parseInt(msg.text);
+            if (!isNaN(maxRecoveries) && maxRecoveries > 0) {
+              this.userStore.setHardTestMaxRecoveries(chatId, maxRecoveries);
+              this.bot.sendMessage(chatId, `✅ Máximo de recuperações definido para ${maxRecoveries}`);
+              this.bot.removeListener('message', maxRecoveriesListener);
+              this.showStrategyConfigMenu(chatId);
+            } else {
+              this.bot.sendMessage(chatId, '❌ Valor inválido. Tente novamente.');
+            }
+          }
+        };
+        
+        this.bot.on('message', maxRecoveriesListener);
         return;
       }
 

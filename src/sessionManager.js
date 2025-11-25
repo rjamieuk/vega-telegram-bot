@@ -5,7 +5,7 @@ export class SessionManager {
     this.bot = bot;
     this.userStore = userStore;
     this.sessions = new Map();
-    this.searchingMessages = new Map(); // chatId -> { messageId, intervalId, lastEditAt }
+    this.searchingMessages = new Map();
   }
 
   hasActiveSession(chatId) {
@@ -223,10 +223,12 @@ Use /stop para encerrar
     // ========== ESTRATÉGIA HARDTEST ==========
     if (strategyMode === 'hardtest') {
       const maxGlobalLoss = user.maxGlobalLoss ?? null;
+      const hardTestCycleGoal = user.hardTestCycleGoal ?? 10;
+      const hardTestMaxRecoveries = user.hardTestMaxRecoveries ?? 20;
 
       const client = new DerivClient(
         user.token,
-        10,
+        hardTestCycleGoal,
         null,
         chatId,
         this.bot,
@@ -235,7 +237,11 @@ Use /stop para encerrar
         false,
         maxGlobalLoss,
         this,
-        { mode: 'hardtest' }
+        {
+          mode: 'hardtest',
+          hardTestCycleGoal: hardTestCycleGoal,
+          hardTestMaxRecoveries: hardTestMaxRecoveries
+        }
       );
 
       this.sessions.set(chatId, client);
@@ -251,9 +257,10 @@ Use /stop para encerrar
 • Usa DIGITMATCH com dígito aleatório (0–9) a cada entrada
 • Stake = 0.5% do saldo (mínimo 0.35 USD, arredondado com 2 casas decimais)
 • Fator de recuperação: 1.13x em caso de loss
-• Meta do ciclo: lucro > 10% sobre o saldo do início do ciclo
+• Meta do ciclo: lucro > ${hardTestCycleGoal}% sobre o saldo do início do ciclo
+• Máximo de recuperações: ${hardTestMaxRecoveries} tentativas consecutivas
 • Ao atingir meta: inicia novo ciclo automaticamente com recálculo de stake
-• Após 20 perdas consecutivas: inicia novo ciclo automaticamente
+• Após ${hardTestMaxRecoveries} perdas consecutivas: inicia novo ciclo automaticamente
 • O bot só para quando você digitar /stop ou atingir Max Loss Global
 
 ${globalLossText}

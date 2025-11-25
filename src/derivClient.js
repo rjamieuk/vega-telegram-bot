@@ -87,6 +87,8 @@ export class DerivClient {
         winCycles: 0,
         lossCycles: 0,
         isPaused: false,
+        cycleGoalPercentage: options.hardTestCycleGoal ?? 10,
+        maxRecoveries: options.hardTestMaxRecoveries ?? 20,
         trade: {
           isActive: false,
           symbol: null,
@@ -1012,14 +1014,14 @@ export class DerivClient {
     }
   }
 
-  // ================= HARDTEST (MODO SILENCIOSO) =================
+  // ================= HARDTEST (MODO SILENCIOSO COM CONFIGURAÇÕES DINÂMICAS) =================
 
   initHardTestCycle() {
     if (!this.hardTestState) return;
 
     this.hardTestState.cycleNumber += 1;
     this.hardTestState.cycleBaseBalance = this.balance.current;
-    this.hardTestState.cycleTargetProfit = this.balance.current * 0.10;
+    this.hardTestState.cycleTargetProfit = this.balance.current * (this.hardTestState.cycleGoalPercentage / 100);
     this.hardTestState.cycleProfitAccumulated = 0;
     this.hardTestState.cycleTradesCount = 0;
     this.hardTestState.lossesInARow = 0;
@@ -1036,8 +1038,9 @@ export class DerivClient {
 🚀 *HardTest - Ciclo #${this.hardTestState.cycleNumber} Iniciado*
 
 💰 Saldo Inicial: ${this.balance.currency} ${this.hardTestState.cycleBaseBalance.toFixed(2)}
-🎯 Meta do Ciclo: +${this.hardTestState.cycleTargetProfit.toFixed(2)} USD (+10%)
+🎯 Meta do Ciclo: +${this.hardTestState.cycleTargetProfit.toFixed(2)} USD (+${this.hardTestState.cycleGoalPercentage}%)
 💵 Stake Base: ${this.balance.currency} ${stake.toFixed(2)}
+🔁 Máx. Recuperações: ${this.hardTestState.maxRecoveries}
 
 _Operações em modo silencioso. Resumo será enviado ao final do ciclo._
     `.trim(), { parse_mode: 'Markdown' });
@@ -1083,7 +1086,7 @@ _Operações em modo silencioso. Resumo será enviado ao final do ciclo._
       this.hardTestState.lossesInARow = 0;
       this.hardTestState.currentStake = this.hardTestState.baseStake;
 
-      // Verifica se atingiu meta de 10%
+      // Verifica se atingiu meta do ciclo
       if (this.hardTestState.cycleProfitAccumulated >= this.hardTestState.cycleTargetProfit) {
         this.hardTestState.winCycles += 1;
 
@@ -1091,7 +1094,7 @@ _Operações em modo silencioso. Resumo será enviado ao final do ciclo._
         this.bot.sendMessage(this.chatId, `
 ✅ *HardTest - Ciclo #${this.hardTestState.cycleNumber} Finalizado*
 
-🎯 Meta de 10% atingida neste ciclo.
+🎯 Meta de ${this.hardTestState.cycleGoalPercentage}% atingida neste ciclo.
 
 📊 *Resumo do Ciclo*
 • Entradas: ${this.hardTestState.cycleTradesCount}
@@ -1135,14 +1138,14 @@ _Aguardando 10 segundos para iniciar novo ciclo..._
     // LOSS
     this.hardTestState.lossesInARow += 1;
 
-    if (this.hardTestState.lossesInARow >= 20) {
+    if (this.hardTestState.lossesInARow >= this.hardTestState.maxRecoveries) {
       this.hardTestState.lossCycles += 1;
 
-      // Mensagem de RESUMO (20 perdas consecutivas)
+      // Mensagem de RESUMO (máximo de recuperações atingido)
       this.bot.sendMessage(this.chatId, `
 ✅ *HardTest - Ciclo #${this.hardTestState.cycleNumber} Finalizado*
 
-⚠️ Ciclo encerrado por atingir 20 perdas consecutivas.
+⚠️ Ciclo encerrado por atingir ${this.hardTestState.maxRecoveries} perdas consecutivas.
 
 📊 *Resumo do Ciclo*
 • Entradas: ${this.hardTestState.cycleTradesCount}
@@ -1412,7 +1415,9 @@ ${hardTestExtra}
         currentStake: this.hardTestState.currentStake,
         lossesInARow: this.hardTestState.lossesInARow,
         winCycles: this.hardTestState.winCycles,
-        lossCycles: this.hardTestState.lossCycles
+        lossCycles: this.hardTestState.lossCycles,
+        cycleGoalPercentage: this.hardTestState.cycleGoalPercentage,
+        maxRecoveries: this.hardTestState.maxRecoveries
       };
     }
 
